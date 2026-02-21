@@ -439,8 +439,6 @@ export class ShellLoop {
   }
 
   async pollOnce(): Promise<boolean> {
-    console.log(`[poll] cycle start (lastRowid: ${this.state.lastRowid})`);
-
     // 0. Deliver pending nudges and check for tasks
     await this.deliverNudges();
     await this.taskRunner.checkForTasks();
