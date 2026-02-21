@@ -2,9 +2,23 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { homedir } from "os";
 import { join } from "path";
 
-const EGG_DIR = join(homedir(), ".egg");
-export const TOKEN_USAGE_FILE = join(EGG_DIR, "token_usage.jsonl");
-const TOKEN_STATE_FILE = join(EGG_DIR, "token-state.json");
+// Store token data in egg-memory/data/ if available, else fall back to ~/.egg/
+const memoryDir = process.env.EGG_MEMORY_DIR || process.cwd();
+const DATA_DIR = join(memoryDir, "data");
+const FALLBACK_DIR = join(homedir(), ".egg");
+
+function resolveDataDir(): string {
+  // Use egg-memory data dir if it looks like a memory dir (has SOUL.md or MEMORY.md),
+  // otherwise fall back to ~/.egg/
+  if (existsSync(join(memoryDir, "SOUL.md")) || existsSync(join(memoryDir, "MEMORY.md"))) {
+    return DATA_DIR;
+  }
+  return FALLBACK_DIR;
+}
+
+const EGG_DATA_DIR = resolveDataDir();
+export const TOKEN_USAGE_FILE = join(EGG_DATA_DIR, "token_usage.jsonl");
+const TOKEN_STATE_FILE = join(EGG_DATA_DIR, "token-state.json");
 
 // Pricing per million tokens (input, output)
 const PRICING: Record<string, { input: number; output: number }> = {
@@ -51,7 +65,7 @@ export function recordTokenUsage(model: string, inputTokens: number, outputToken
     cost_usd: cost,
   };
   try {
-    mkdirSync(EGG_DIR, { recursive: true });
+    mkdirSync(EGG_DATA_DIR, { recursive: true });
     appendFileSync(TOKEN_USAGE_FILE, JSON.stringify(record) + "\n");
   } catch (err) {
     console.error("[token-tracker] failed to record token usage:", err);
@@ -169,7 +183,7 @@ export function loadTokenState(): TokenState {
 
 export function saveTokenState(state: TokenState): void {
   try {
-    mkdirSync(EGG_DIR, { recursive: true });
+    mkdirSync(EGG_DATA_DIR, { recursive: true });
     writeFileSync(TOKEN_STATE_FILE, JSON.stringify(state, null, 2));
   } catch (err) {
     console.error("[token-tracker] failed to save token state:", err);
