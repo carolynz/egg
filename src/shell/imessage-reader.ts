@@ -15,6 +15,10 @@ const NS_CLASS_RE = /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/g;
 // Magic bytes for NSKeyedArchiver binary plist: ASCII "bplist00"
 const BPLIST_MAGIC = Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30]);
 
+// NSKeyedArchiver structural keys — present in every NSKeyedArchiver serialization.
+// These strings never appear in legitimate user messages.
+const NSKEYEDARCHIVER_KEY_RE = /\$classname|\$classes|\$archiver|\$objects|\$version/;
+
 function hasNSClassArtifacts(text: string): boolean {
   return /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/.test(text);
 }
@@ -23,24 +27,49 @@ function hasNSClassArtifacts(text: string): boolean {
  * Detect and strip NSKeyedArchiver binary plist blobs from a text string.
  * iOS sometimes encodes date-like strings (e.g. "tomorrow") as NSDate objects
  * serialized as binary plists, which arrive as binary garbage in chat.db text.
- * Binary plists start with "bplist00" (0x62706c6973743030).
+ *
+ * Two detection paths:
+ *  1. Text starts with "bplist00" — the binary plist magic header decoded intact.
+ *  2. Text contains NSKeyedArchiver structural keys ($classname, $classes, etc.)
+ *     even without the magic prefix — this happens when the leading bytes of the
+ *     bplist are invalid UTF-8 and get replaced with U+FFFD by SQLite/better-sqlite3,
+ *     so the string starts with \ufffd instead of "bplist00".
  */
 function stripBplistBlob(text: string): string {
-  if (!text.startsWith("bplist00")) return text;
+  const startsWithBplist = text.startsWith("bplist00");
+  // Detect NSKeyedArchiver blobs that lost their magic prefix via UTF-8 replacement
+  const hasNSKAKeys = !startsWithBplist && NSKEYEDARCHIVER_KEY_RE.test(text);
 
-  // Try to recover any readable text segments after the blob
-  const segments = text.match(/[\x20-\x7e\u00a0-\uffff]{4,}/g);
+  if (!startsWithBplist && !hasNSKAKeys) return text;
+
+  if (hasNSKAKeys) {
+    console.warn(
+      "[parse] text field contains NSKeyedArchiver keys (no bplist00 prefix) — binary date blob detected",
+    );
+  }
+
+  // Try to recover any readable text segments (ASCII-only to avoid \ufffd garbage).
+  // In bplist format, string values are stored as raw bytes — e.g. "tomorrow" appears
+  // as `Xtomorrow` where 0x58 is the bplist "8-byte ASCII string" marker. After
+  // NS* class names and structural keys are filtered out, nothing useful remains
+  // for a pure NSDate message, so we fall through to returning [date].
+  const segments = text.match(/[\x20-\x7e]{4,}/g);
   if (segments) {
     const clean = segments.filter(
-      (s) => !hasNSClassArtifacts(s) && !s.includes("__kIM") && !s.startsWith("bplist"),
+      (s) =>
+        !hasNSClassArtifacts(s) &&
+        !NSKEYEDARCHIVER_KEY_RE.test(s) &&
+        !s.includes("__kIM") &&
+        !s.startsWith("bplist") &&
+        !/^\$/.test(s),
     );
     if (clean.length > 0) {
-      console.warn("[parse] stripped bplist blob from text field, kept readable segments");
+      console.warn("[parse] stripped NSKeyedArchiver/bplist blob from text field, kept readable segments");
       return clean.join(" ").trim();
     }
   }
 
-  console.warn("[parse] text field is pure bplist blob — replacing with [date]");
+  console.warn("[parse] text field is NSKeyedArchiver/bplist blob — replacing with [date]");
   return "[date]";
 }
 
