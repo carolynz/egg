@@ -1,23 +1,63 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { createServer } from "http";
+import { execSync } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 import { NUDGES_DIR } from "../config.js";
 
-// ── Token resolution ──────────────────────────────────────────────────────────
+// ── OAuth2 constants ──────────────────────────────────────────────────────────
 
-function getOuraToken(): string | null {
-  if (process.env.OURA_TOKEN) return process.env.OURA_TOKEN;
+const OURA_AUTHORIZE_URL = "https://cloud.ouraring.com/oauth/authorize";
+const OURA_TOKEN_URL = "https://api.ouraring.com/oauth/token";
+const OURA_API_BASE = "https://api.ouraring.com/v2/";
+
+// ── OAuth2 config ─────────────────────────────────────────────────────────────
+
+interface OuraOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
+function getOAuthConfig(): OuraOAuthConfig | null {
+  const clientId = process.env.OURA_CLIENT_ID;
+  const clientSecret = process.env.OURA_CLIENT_SECRET;
+  if (clientId && clientSecret) return { clientId, clientSecret };
 
   const configPath = join(homedir(), ".egg", "config.json");
   if (existsSync(configPath)) {
     try {
       const cfg = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
       const oura = cfg?.oura as Record<string, unknown> | undefined;
-      if (typeof oura?.token === "string") return oura.token;
+      if (typeof oura?.clientId === "string" && typeof oura?.clientSecret === "string") {
+        return { clientId: oura.clientId, clientSecret: oura.clientSecret };
+      }
     } catch {}
   }
 
   return null;
+}
+
+// ── Token storage ─────────────────────────────────────────────────────────────
+
+interface OuraTokens {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // unix ms
+}
+
+const OURA_TOKENS_FILE = join(homedir(), ".egg", "oura-tokens.json");
+
+function loadTokens(): OuraTokens | null {
+  try {
+    return JSON.parse(readFileSync(OURA_TOKENS_FILE, "utf-8")) as OuraTokens;
+  } catch {
+    return null;
+  }
+}
+
+function saveTokens(tokens: OuraTokens): void {
+  mkdirSync(join(homedir(), ".egg"), { recursive: true });
+  writeFileSync(OURA_TOKENS_FILE, JSON.stringify(tokens, null, 2), { mode: 0o600 });
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -30,6 +70,57 @@ function logOura(message: string): void {
     mkdirSync(join(homedir(), ".egg", "logs"), { recursive: true });
     appendFileSync(OURA_LOG, `[${new Date().toISOString()}] ${message}\n`);
   } catch {}
+}
+
+// ── Token refresh ─────────────────────────────────────────────────────────────
+
+async function refreshTokens(config: OuraOAuthConfig, refreshToken: string): Promise<OuraTokens> {
+  const res = await fetch(OURA_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Token refresh failed: ${res.status} ${body}`);
+  }
+
+  const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
+  const tokens: OuraTokens = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + data.expires_in * 1000,
+  };
+  saveTokens(tokens);
+  return tokens;
+}
+
+async function getValidAccessToken(): Promise<string | null> {
+  const config = getOAuthConfig();
+  if (!config) return null;
+
+  let tokens = loadTokens();
+  if (!tokens) return null;
+
+  // Refresh if expiring within 5 minutes
+  if (tokens.expires_at < Date.now() + 5 * 60 * 1000) {
+    logOura("Access token expiring soon — refreshing");
+    try {
+      tokens = await refreshTokens(config, tokens.refresh_token);
+    } catch (err) {
+      logOura(`ERROR refreshing token: ${err}`);
+      return null;
+    }
+  }
+
+  return tokens.access_token;
 }
 
 // ── Oura state ────────────────────────────────────────────────────────────────
@@ -72,7 +163,7 @@ interface DailySleep {
 
 async function ouriFetch<T>(token: string, path: string, params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
-  const url = `https://api.ouraring.com/v2/usercollection/${path}?${qs}`;
+  const url = `${OURA_API_BASE}usercollection/${path}?${qs}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -177,24 +268,157 @@ async function checkWakeUp(token: string): Promise<void> {
   }
 }
 
+// ── OAuth2 authorization flow ─────────────────────────────────────────────────
+
+export async function ouraAuth(): Promise<void> {
+  const config = getOAuthConfig();
+  if (!config) {
+    console.error(
+      "[oura] OAuth2 credentials not found.\n" +
+      "  Set OURA_CLIENT_ID and OURA_CLIENT_SECRET in .env, or add:\n" +
+      '  { "oura": { "clientId": "...", "clientSecret": "..." } } to ~/.egg/config.json'
+    );
+    process.exit(1);
+  }
+
+  const port = 4000 + Math.floor(Math.random() * 1000);
+  const redirectUri = `http://localhost:${port}/callback`;
+  const state = Math.random().toString(36).slice(2);
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: config.clientId,
+    redirect_uri: redirectUri,
+    scope: "daily personal",
+    state,
+  });
+
+  const authorizeUrl = `${OURA_AUTHORIZE_URL}?${params.toString()}`;
+  console.log("\n[oura] Starting OAuth2 authorization flow...");
+  console.log(`\nOpen this URL in your browser:\n\n  ${authorizeUrl}\n`);
+
+  // Try to open in browser automatically
+  try {
+    execSync(`open ${JSON.stringify(authorizeUrl)}`, { stdio: "ignore" });
+    console.log("[oura] Browser opened automatically.");
+  } catch {
+    // Manual fallback — user sees the URL above
+  }
+
+  // Spin up a local HTTP server to capture the OAuth2 callback
+  const code = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      server.close();
+      reject(new Error("OAuth2 timeout: no callback received within 5 minutes"));
+    }, 5 * 60 * 1000);
+
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+      if (url.pathname !== "/callback") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const returnedState = url.searchParams.get("state");
+      const authCode = url.searchParams.get("code");
+      const error = url.searchParams.get("error");
+
+      if (error) {
+        res.writeHead(400, { "Content-Type": "text/html" });
+        res.end(`<h1>Authorization failed: ${error}</h1><p>You may close this tab.</p>`);
+        clearTimeout(timeout);
+        server.close();
+        reject(new Error(`OAuth2 error: ${error}`));
+        return;
+      }
+
+      if (returnedState !== state || !authCode) {
+        res.writeHead(400, { "Content-Type": "text/html" });
+        res.end("<h1>Invalid callback</h1><p>You may close this tab.</p>");
+        clearTimeout(timeout);
+        server.close();
+        reject(new Error("OAuth2 callback: invalid state or missing code"));
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<h1>Authorization successful!</h1><p>You may close this tab and return to your terminal.</p>");
+      clearTimeout(timeout);
+      server.close();
+      resolve(authCode);
+    });
+
+    server.listen(port, "127.0.0.1", () => {
+      console.log(`[oura] Listening for callback on http://localhost:${port}/callback`);
+    });
+
+    server.on("error", (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+
+  console.log("[oura] Authorization code received. Exchanging for tokens...");
+
+  // Exchange authorization code for tokens
+  const res = await fetch(OURA_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+    }).toString(),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Token exchange failed: ${res.status} ${body}`);
+  }
+
+  const data = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
+  const tokens: OuraTokens = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + data.expires_in * 1000,
+  };
+  saveTokens(tokens);
+
+  console.log(`\n[oura] Tokens saved to ${OURA_TOKENS_FILE}`);
+  console.log("[oura] OAuth2 setup complete! You can now run `egg serve`.");
+}
+
 // ── OuraPoller ────────────────────────────────────────────────────────────────
 
 export class OuraPoller {
   private intervalId: NodeJS.Timeout | null = null;
-  private readonly token: string | null;
+  private readonly hasCredentials: boolean;
 
   constructor() {
-    this.token = getOuraToken();
-    if (!this.token) {
-      console.warn(
-        "[oura] token not found — Oura integration disabled.\n" +
-        "  Set OURA_TOKEN in .env, or add { \"oura\": { \"token\": \"...\" } } to ~/.egg/config.json"
-      );
+    const config = getOAuthConfig();
+    const tokens = loadTokens();
+    this.hasCredentials = !!(config && tokens);
+    if (!this.hasCredentials) {
+      if (!config) {
+        console.warn(
+          "[oura] OAuth2 credentials not found — Oura integration disabled.\n" +
+          "  Set OURA_CLIENT_ID/OURA_CLIENT_SECRET in .env or ~/.egg/config.json\n" +
+          "  Then run `egg oura:auth` to authorize."
+        );
+      } else {
+        console.warn(
+          "[oura] No Oura tokens found — run `egg oura:auth` to authorize."
+        );
+      }
     }
   }
 
   start(): void {
-    if (!this.token) return;
+    if (!this.hasCredentials) return;
     logOura("Oura poller starting (every 5 minutes)");
     void this.poll();
     this.intervalId = setInterval(() => void this.poll(), 5 * 60 * 1000);
@@ -209,7 +433,12 @@ export class OuraPoller {
 
   private async poll(): Promise<void> {
     try {
-      await checkWakeUp(this.token!);
+      const token = await getValidAccessToken();
+      if (!token) {
+        logOura("No valid access token — skipping poll. Run `egg oura:auth` to re-authorize.");
+        return;
+      }
+      await checkWakeUp(token);
     } catch (err) {
       logOura(`ERROR in poll: ${err}`);
     }

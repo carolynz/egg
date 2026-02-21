@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { ShellLoop } from "./shell/loop.js";
 import { callBrain } from "./brain/index.js";
 import { senseDaily, senseImessage } from "./senses/index.js";
+import { ouraAuth } from "./integrations/oura.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -138,6 +139,14 @@ intake
   .action(async () => {
     checkMemoryDir();
     await senseDaily();
+  });
+
+// ── oura:auth ──
+program
+  .command("oura:auth")
+  .description("Authorize Egg to access your Oura ring via OAuth2")
+  .action(async () => {
+    await ouraAuth();
   });
 
 // ── status ──

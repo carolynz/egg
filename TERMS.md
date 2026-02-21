@@ -14,7 +14,7 @@ This software is provided "as is" without warranty of any kind. The author makes
 
 ## Oura integration
 
-The Oura integration accesses your sleep data via the Oura API using a personal access token you provide. You are responsible for keeping your token secure. You must comply with [Oura's Terms of Service](https://ouraring.com/terms-of-service) when using their API.
+The Oura integration accesses your sleep data via the Oura API using OAuth2. You are responsible for keeping your OAuth2 credentials (client secret and stored tokens) secure. You must comply with [Oura's Terms of Service](https://ouraring.com/terms-of-service) when using their API.
 
 ## Your responsibilities
 

@@ -168,6 +168,39 @@ crontab -e
 */5 * * * * cd ~/egg-memory && git pull --rebase --quiet
 ```
 
+### 6. Oura ring (optional)
+
+Egg can detect when you wake up and send a personalized good morning message based on your sleep score.
+
+**Register an OAuth2 app** in the [Oura Developer Portal](https://cloud.ouraring.com/personal-access-tokens) under "OAuth2 Applications". Set the redirect URI to `http://localhost:<any-port>/callback`. Note your client ID and client secret.
+
+**Add credentials** to your environment (in `~/egg-memory/.env`) or to `~/.egg/config.json`:
+
+```bash
+# Option A: .env
+OURA_CLIENT_ID=your-client-id
+OURA_CLIENT_SECRET=your-client-secret
+```
+
+```json
+// Option B: ~/.egg/config.json
+{
+  "oura": {
+    "clientId": "your-client-id",
+    "clientSecret": "your-client-secret"
+  }
+}
+```
+
+**Authorize** (run once on the Mac Mini):
+
+```bash
+cd ~/egg-memory
+egg oura:auth
+```
+
+This opens a browser, you approve access, and tokens are saved to `~/.egg/oura_tokens.json`. Egg will refresh them automatically as needed.
+
 ## Commands
 
 All commands run from inside your `egg-memory` directory.
@@ -181,6 +214,7 @@ egg serve --bb-only    # BlueBubbles only (no AppleScript fallback)
 egg nudge              # ask brain if a nudge is warranted
 egg nudge --dry-run    # preview without writing nudge file
 egg intake daily       # generate daily context digest
+egg oura:auth          # authorize Oura ring via OAuth2 (one-time setup)
 egg status             # show config and pending nudges
 
 # Laptop — on-demand

@@ -29,7 +29,7 @@ This is a single-user personal application. Only you (the operator) control the 
 
 ## Third-party services
 
-- **Oura API**: used to retrieve sleep data. Subject to [Oura's Privacy Policy](https://ouraring.com/privacy-policy).
+- **Oura API**: used to retrieve sleep data via OAuth2. OAuth2 tokens are stored in `~/.egg/oura_tokens.json` (mode 600). Subject to [Oura's Privacy Policy](https://ouraring.com/privacy-policy).
 - **AI providers** (configured by you): sleep and health data may be included in prompts sent to whichever AI provider you choose — remote hosted (e.g. Anthropic) or local (e.g. Ollama). You control this configuration. Remote providers are subject to their respective privacy and data use policies; local models keep data on your own hardware.
 
 ## Contact
