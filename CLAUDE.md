@@ -27,3 +27,8 @@ egg status             # show config + pending nudges
 - State persisted as JSON in egg-memory/.egg-state.json
 - Early save pattern: persist ROWIDs before brain call to prevent duplicate replies
 - Multi-message: each `\n` in brain reply becomes a separate iMessage
+
+## Workflow
+
+- **Run `npm run build` after code changes** to verify TypeScript compiles cleanly.
+- **Always commit at the end of every session.** After making any changes, run `npm run build`, stage all modified files, and commit with a descriptive message. Never leave uncommitted work.
