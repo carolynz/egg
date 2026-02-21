@@ -1,5 +1,5 @@
-<img src="assets/egg-header.svg" width="100%" alt="Egg" />
-<img src="assets/egg-warning.svg" width="100%" alt="Warning" />
+<img src="assets/egg-header-2.svg" width="100%" alt="Egg" />
+<img src="assets/egg-warning-2.svg" width="100%" alt="Warning" />
 
 # Egg
 
@@ -31,15 +31,18 @@ The brain is just `claude -p` running inside the egg-memory directory. No Anthro
 Egg is designed to run across two Macs that share the same `egg-memory` repo via git.
 
 **Mac Mini** (always-on server):
+
 - Runs `egg serve` continuously — polls iMessage for texts sent to Egg's Apple ID and replies via the brain
 - Delivers proactive nudges (cron runs `egg nudge` periodically)
 - Routes requests to Claude Code when asked
 
 **Personal laptop** (on-demand):
+
 - Runs `egg intake imessage` to process your full iMessage history, build dossiers on people and yourself, and push updates to egg-memory
 - Can also run `egg intake daily` to generate daily context digests
 
 Both machines have:
+
 - `egg-memory` cloned to the same path
 - Claude Code CLI installed and authenticated
 - A cron job that `git pull`s egg-memory regularly to stay in sync
