@@ -12,8 +12,36 @@ const EMAIL_RE = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
 // "bplist" (binary plist used by NSKeyedArchiver).
 const NS_CLASS_RE = /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/g;
 
+// Magic bytes for NSKeyedArchiver binary plist: ASCII "bplist00"
+const BPLIST_MAGIC = Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30]);
+
 function hasNSClassArtifacts(text: string): boolean {
   return /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/.test(text);
+}
+
+/**
+ * Detect and strip NSKeyedArchiver binary plist blobs from a text string.
+ * iOS sometimes encodes date-like strings (e.g. "tomorrow") as NSDate objects
+ * serialized as binary plists, which arrive as binary garbage in chat.db text.
+ * Binary plists start with "bplist00" (0x62706c6973743030).
+ */
+function stripBplistBlob(text: string): string {
+  if (!text.startsWith("bplist00")) return text;
+
+  // Try to recover any readable text segments after the blob
+  const segments = text.match(/[\x20-\x7e\u00a0-\uffff]{4,}/g);
+  if (segments) {
+    const clean = segments.filter(
+      (s) => !hasNSClassArtifacts(s) && !s.includes("__kIM") && !s.startsWith("bplist"),
+    );
+    if (clean.length > 0) {
+      console.warn("[parse] stripped bplist blob from text field, kept readable segments");
+      return clean.join(" ").trim();
+    }
+  }
+
+  console.warn("[parse] text field is pure bplist blob — replacing with [date]");
+  return "[date]";
 }
 
 export interface Attachment {
@@ -40,6 +68,14 @@ function scrubText(text: string): string {
 function decodeAttributedBody(blob: Buffer): string | null {
   if (!blob || blob.length === 0) return null;
   try {
+    // Early exit: if the blob is an NSKeyedArchiver binary plist (starts with
+    // "bplist00"), it contains a serialized NSDate or similar object — there is
+    // no readable message text to extract.
+    if (blob.length >= 8 && blob.subarray(0, 8).equals(BPLIST_MAGIC)) {
+      console.warn("[parse] attributedBody is a bplist blob (NSDate?) — skipping");
+      return null;
+    }
+
     // Ported from Python egg-me-on: find text between known markers in the
     // NSKeyedArchiver typedstream blob, with a regex fallback.
     const END_MARKERS = [Buffer.from([0x86, 0x84]), Buffer.from([0x00, 0x00, 0x00])];
@@ -168,7 +204,9 @@ export function getEggMessages(
         if (valid.length > 0) attachments = valid;
       }
 
-      let text = row.text;
+      // Strip NSKeyedArchiver binary plist blobs early, before any other processing.
+      // iOS encodes date-like strings (e.g. "tomorrow") as NSDate bplist blobs.
+      let text = row.text ? stripBplistBlob(row.text) : row.text;
       const attrText = row.attributedBody
         ? decodeAttributedBody(row.attributedBody)
         : null;
