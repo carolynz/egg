@@ -202,8 +202,8 @@ export function getEggMessages(
 
       // Strip non-printable chars and \ufffc placeholders
       if (text) {
-        // Remove everything outside printable ASCII + common unicode
-        text = text.replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, "");
+        // Remove everything outside printable ASCII + common unicode, but preserve newlines/tabs
+        text = text.replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
         text = text.replace(/\ufffc/g, "");
         text = text.replace(NS_CLASS_RE, "");
         // Strip invisible Unicode formatting characters
