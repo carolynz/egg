@@ -281,7 +281,7 @@ export async function ouraAuth(): Promise<void> {
     process.exit(1);
   }
 
-  const port = 4000 + Math.floor(Math.random() * 1000);
+  const port = 4321; // Fixed port — register http://localhost:4321/callback in Oura developer portal
   const redirectUri = `http://localhost:${port}/callback`;
   const state = Math.random().toString(36).slice(2);
 
@@ -289,7 +289,7 @@ export async function ouraAuth(): Promise<void> {
     response_type: "code",
     client_id: config.clientId,
     redirect_uri: redirectUri,
-    scope: "daily personal",
+    scope: "daily personal heartrate workout session",
     state,
   });
 
@@ -377,6 +377,10 @@ export async function ouraAuth(): Promise<void> {
 
   if (!res.ok) {
     const body = await res.text();
+    console.error(`[oura] Token exchange failed (${res.status}):`);
+    console.error(`[oura] Response: ${body}`);
+    console.error(`[oura] Redirect URI sent: ${redirectUri}`);
+    console.error(`[oura] Make sure this exact URI is registered in the Oura developer portal.`);
     throw new Error(`Token exchange failed: ${res.status} ${body}`);
   }
 
