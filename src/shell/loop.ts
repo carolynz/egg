@@ -7,6 +7,17 @@ import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
 import { OuraPoller } from "../integrations/oura.js";
+import {
+  recordTokenUsage,
+  getDailySummary,
+  formatSummaryMessages,
+  formatSummaryLogLine,
+  getPacificDate,
+  getPacificHour,
+  loadTokenState,
+  saveTokenState,
+} from "../token-tracker.js";
+import { logApiSpend } from "../logger.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { join, extname } from "path";
 import { tmpdir } from "os";
@@ -561,6 +572,7 @@ export class ShellLoop {
       reply = await callBrain({
         history: this.state.history.slice(0, -1), // exclude the just-added user msg
         message: combinedText,
+        runningTasks: this.taskRunner.runningTaskSummaries,
       });
     } catch (err) {
       console.error("Brain call failed:", err);

@@ -27,11 +27,21 @@ function getContextBlock(): string {
 export async function callBrain(opts: {
   history: { role: string; content: string }[];
   message: string;
+  runningTasks?: { id: string; prompt: string; startedAt: Date }[];
 }): Promise<string> {
   // Format conversation history + new message as a single prompt
   const lines: string[] = [];
 
   lines.push(getContextBlock());
+
+  if (opts.runningTasks && opts.runningTasks.length > 0) {
+    lines.push("Currently running tasks (DO NOT create duplicate tasks for these):");
+    for (const t of opts.runningTasks) {
+      const elapsed = Math.round((Date.now() - t.startedAt.getTime()) / 1000);
+      lines.push(`  - task ${t.id} (running ${elapsed}s): ${t.prompt.slice(0, 150)}`);
+    }
+    lines.push("");
+  }
 
   if (opts.history.length > 0) {
     lines.push("Recent conversation history:");

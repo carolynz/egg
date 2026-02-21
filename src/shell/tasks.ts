@@ -227,4 +227,12 @@ export class TaskRunner {
   get hasRunningTasks(): boolean {
     return this.running.size > 0;
   }
+
+  get runningTaskSummaries(): { id: string; prompt: string; startedAt: Date }[] {
+    return [...this.running.values()].map((t) => ({
+      id: t.id,
+      prompt: t.prompt,
+      startedAt: t.startedAt,
+    }));
+  }
 }
