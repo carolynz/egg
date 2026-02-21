@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import {
   existsSync,
   mkdirSync,
@@ -184,6 +184,11 @@ export class TaskRunner {
     const state = loadState();
     state.restarting = true;
     saveState(state);
+
+    // Kill any other egg serve processes to prevent duplicates
+    try {
+      execSync(`pkill -f 'egg serve' || true`, { stdio: "ignore" });
+    } catch {}
 
     const child = spawn(process.argv[0], process.argv.slice(1), {
       stdio: "inherit",
