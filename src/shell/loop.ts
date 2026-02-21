@@ -6,6 +6,7 @@ import { callBrain } from "../brain/index.js";
 import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
+import { OuraPoller } from "../integrations/oura.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { join, extname } from "path";
 import { tmpdir } from "os";
@@ -162,6 +163,7 @@ export class ShellLoop {
   private bb: BlueBubblesClient;
   private sender: Sender;
   private taskRunner: TaskRunner;
+  private ouraPoller: OuraPoller;
   private state: ShellState;
   private seenSet: Set<number>;
   private userPhoneNorm: string;
@@ -177,6 +179,7 @@ export class ShellLoop {
       this.state.history.push({ role: "assistant", content: text });
       this.persist();
     });
+    this.ouraPoller = new OuraPoller();
   }
 
   async init(): Promise<void> {
@@ -608,6 +611,7 @@ export class ShellLoop {
     const shutdown = () => {
       console.log("Shutting down — saving state");
       this.running = false;
+      this.ouraPoller.stop();
       this.persist();
       process.exit(0);
     };
@@ -617,6 +621,7 @@ export class ShellLoop {
 
     await this.handleStartupRecovery();
     this.startNudgeWatcher();
+    this.ouraPoller.start();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {
