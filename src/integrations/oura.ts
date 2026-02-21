@@ -103,6 +103,11 @@ async function refreshTokens(config: OuraOAuthConfig, refreshToken: string): Pro
 }
 
 async function getValidAccessToken(): Promise<string | null> {
+  // Personal API token takes priority — long-lived Bearer token, no OAuth dance needed
+  const personalToken = process.env.OURA_TOKEN;
+  if (personalToken) return personalToken;
+
+  // Fall back to OAuth2 flow
   const config = getOAuthConfig();
   if (!config) return null;
 
@@ -151,9 +156,18 @@ interface SleepSession {
   day: string;
   bedtime_end: string | null;
   type: string;
+  total_sleep_duration: number | null; // seconds
+  average_hrv: number | null;
+  average_heart_rate: number | null;
 }
 
 interface DailySleep {
+  id: string;
+  day: string;
+  score: number | null;
+}
+
+interface DailyReadiness {
   id: string;
   day: string;
   score: number | null;
@@ -182,19 +196,79 @@ async function fetchDailySleep(token: string, startDate: string): Promise<DailyS
   return ouriFetch<DailySleep[]>(token, "daily_sleep", { start_date: startDate });
 }
 
-// ── Nudge message ─────────────────────────────────────────────────────────────
+async function fetchDailyReadiness(token: string, startDate: string): Promise<DailyReadiness[]> {
+  return ouriFetch<DailyReadiness[]>(token, "daily_readiness", { start_date: startDate });
+}
 
-function buildGoodMorningMessage(score: number | null): string {
-  if (score === null || score === undefined) {
-    return "Good morning! Hope you slept well ☀️";
+// ── Message generation ────────────────────────────────────────────────────────
+
+function formatSleepDuration(totalSecs: number): string {
+  const hours = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  return mins > 0 ? `${hours}h${mins}m` : `${hours}h`;
+}
+
+function buildSleepLine(
+  sleepScore: number | null,
+  totalSleepSeconds: number | null,
+  avgHrv: number | null,
+  avgHeartRate: number | null,
+): string {
+  const parts: string[] = [];
+  if (totalSleepSeconds !== null) {
+    parts.push(formatSleepDuration(totalSleepSeconds));
   }
-  if (score >= 85) {
-    return `Good morning! Sleep score was ${score} — you're well rested. Great start to the day ☀️`;
+  if (sleepScore !== null) {
+    parts.push(`sleep score ${sleepScore}`);
   }
-  if (score >= 70) {
-    return `Good morning! Sleep score was ${score} — decent rest. Have a good one ☀️`;
+
+  let interpretation = "";
+  if (sleepScore !== null) {
+    if (sleepScore >= 85) interpretation = "great recovery";
+    else if (sleepScore >= 70) interpretation = "decent recovery";
+    else if (sleepScore >= 60) interpretation = "light recovery";
+    else interpretation = "rough night";
   }
-  return `Good morning! Sleep score was ${score} — not the best night. Take it easy today 💤`;
+
+  let line = parts.join(", ");
+  if (interpretation) line += ` — ${interpretation}`;
+
+  const metrics: string[] = [];
+  if (avgHrv !== null) metrics.push(`HRV ${Math.round(avgHrv)}`);
+  if (avgHeartRate !== null) metrics.push(`RHR ${Math.round(avgHeartRate)}`);
+  if (metrics.length > 0) line += `. ${metrics.join(", ")}`;
+
+  return line || "good morning";
+}
+
+function buildReadinessLine(readinessScore: number | null): string {
+  if (readinessScore === null) {
+    return "readiness unknown — moderate day, listen to your body";
+  }
+  if (readinessScore < 60) {
+    return `readiness ${readinessScore} — go easy today, prioritize rest`;
+  }
+  if (readinessScore < 80) {
+    return `readiness ${readinessScore} — good day to work, moderate effort`;
+  }
+  return `readiness ${readinessScore} — push hard, great day for strength training or a big ask`;
+}
+
+function buildGoodMorningMessage(data: {
+  sleepScore: number | null;
+  readinessScore: number | null;
+  totalSleepSeconds: number | null;
+  avgHrv: number | null;
+  avgHeartRate: number | null;
+}): string {
+  const lines = [
+    buildSleepLine(data.sleepScore, data.totalSleepSeconds, data.avgHrv, data.avgHeartRate),
+    buildReadinessLine(data.readinessScore),
+    "water before coffee",
+    "teeth + face (non-negotiable)",
+    "cat-cow + child's pose (2 min) — then set one intention for the day",
+  ];
+  return lines.join("\n");
 }
 
 // ── Wake detection ────────────────────────────────────────────────────────────
@@ -234,26 +308,57 @@ async function checkWakeUp(token: string): Promise<void> {
     return wakeTime >= thirtyMinAgo && wakeTime <= now;
   });
 
-  if (!recentWake) {
-    logOura(`No recent wake in last 30 min (${sessions.length} sessions checked)`);
+  // Time-based fallback: if 7–9am, fire even without recent wake detection
+  const isTimeBasedTrigger = hour >= 7 && hour < 9;
+
+  if (!recentWake && !isTimeBasedTrigger) {
+    logOura(`No recent wake in last 30 min (${sessions.length} sessions checked), not in 7–9am window — skipping`);
     return;
   }
 
-  logOura(`Wake detected: bedtime_end=${recentWake.bedtime_end} day=${recentWake.day}`);
+  if (recentWake) {
+    logOura(`Wake detected: bedtime_end=${recentWake.bedtime_end} day=${recentWake.day}`);
+  } else {
+    logOura(`Time-based trigger (${hour}:xx in 7–9am window) — firing good morning nudge`);
+  }
 
-  // Fetch sleep score from daily summary
-  let score: number | null = null;
+  // Best available long sleep session for metrics
+  const latestLongSleep = recentWake ?? sessions
+    .filter((s) => s.type === "long_sleep" && s.bedtime_end != null)
+    .sort((a, b) => new Date(b.bedtime_end!).getTime() - new Date(a.bedtime_end!).getTime())[0] ?? null;
+
+  // Fetch sleep score
+  let sleepScore: number | null = null;
   try {
     const dailySleep = await fetchDailySleep(token, startDate);
-    const match = dailySleep.find((d) => d.day === todayDate || d.day === recentWake.day);
-    score = match?.score ?? null;
-    logOura(`Sleep score: ${score}`);
+    const matchDay = latestLongSleep?.day ?? todayDate;
+    const match = dailySleep.find((d) => d.day === todayDate || d.day === matchDay);
+    sleepScore = match?.score ?? null;
+    logOura(`Sleep score: ${sleepScore}`);
   } catch (err) {
     logOura(`WARNING: Could not fetch daily sleep score: ${err}`);
   }
 
-  // Write nudge file
-  const message = buildGoodMorningMessage(score);
+  // Fetch readiness score
+  let readinessScore: number | null = null;
+  try {
+    const dailyReadiness = await fetchDailyReadiness(token, startDate);
+    const match = dailyReadiness.find((d) => d.day === todayDate);
+    readinessScore = match?.score ?? null;
+    logOura(`Readiness score: ${readinessScore}`);
+  } catch (err) {
+    logOura(`WARNING: Could not fetch daily readiness: ${err}`);
+  }
+
+  // Write nudge file (each \n becomes a separate iMessage via sendReply)
+  const message = buildGoodMorningMessage({
+    sleepScore,
+    readinessScore,
+    totalSleepSeconds: latestLongSleep?.total_sleep_duration ?? null,
+    avgHrv: latestLongSleep?.average_hrv ?? null,
+    avgHeartRate: latestLongSleep?.average_heart_rate ?? null,
+  });
+
   const timestamp = now.toISOString().replace(/[:.]/g, "-");
   const nudgeFile = join(NUDGES_DIR, `${timestamp}.md`);
 
@@ -403,15 +508,16 @@ export class OuraPoller {
   private readonly hasCredentials: boolean;
 
   constructor() {
+    const hasPersonalToken = !!process.env.OURA_TOKEN;
     const config = getOAuthConfig();
     const tokens = loadTokens();
-    this.hasCredentials = !!(config && tokens);
+    this.hasCredentials = hasPersonalToken || !!(config && tokens);
     if (!this.hasCredentials) {
       if (!config) {
         console.warn(
-          "[oura] OAuth2 credentials not found — Oura integration disabled.\n" +
-          "  Set OURA_CLIENT_ID/OURA_CLIENT_SECRET in .env or ~/.egg/config.json\n" +
-          "  Then run `egg oura:auth` to authorize."
+          "[oura] Oura integration disabled — no credentials found.\n" +
+          "  Option A (simple): set OURA_TOKEN in .env with your Personal Access Token\n" +
+          "  Option B (OAuth2): set OURA_CLIENT_ID/OURA_CLIENT_SECRET and run `egg oura:auth`"
         );
       } else {
         console.warn(
