@@ -20,6 +20,7 @@ function required(key: string): string {
 export const EGG_MEMORY_DIR = process.cwd();
 export const EGG_PID_FILE = join(homedir(), ".egg", "egg.pid");
 export const EGG_BRAIN = env("EGG_BRAIN") || "claude";
+export const EGG_MODEL = env("EGG_MODEL") || "claude-opus-4-6";
 export const CHAT_DB = env("CHAT_DB") || join(homedir(), "Library", "Messages", "chat.db");
 
 // Derived paths

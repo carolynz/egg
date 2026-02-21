@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { EGG_BRAIN, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir } from "../config.js";
+import { EGG_BRAIN, EGG_MODEL, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir } from "../config.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState } from "./state.js";
 import { logTaskStart, logTaskEnd } from "../logger.js";
@@ -86,7 +86,7 @@ export class TaskRunner {
       "3. If either fails, fix the errors before finishing",
     ].join("\n");
 
-    const args = ["-p", fullPrompt, "--dangerously-skip-permissions", "--output-format", "text"];
+    const args = ["-p", fullPrompt, "--dangerously-skip-permissions", "--output-format", "text", "--model", EGG_MODEL];
 
     const child = spawn(EGG_BRAIN, args, {
       cwd: codeDir,

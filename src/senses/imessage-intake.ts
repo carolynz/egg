@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { EGG_BRAIN, EGG_MEMORY_DIR } from "../config.js";
+import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL } from "../config.js";
 
 export async function senseImessage(): Promise<void> {
   // TODO: Phase 3 — read broader iMessage history, group by contact,
@@ -16,7 +16,7 @@ export async function senseDaily(): Promise<void> {
   ].join("\n");
 
   console.log("Running daily sense...");
-  const child = spawn(EGG_BRAIN, ["-p", prompt, "--output-format", "text"], {
+  const child = spawn(EGG_BRAIN, ["-p", prompt, "--output-format", "text", "--model", EGG_MODEL], {
     cwd: EGG_MEMORY_DIR,
     stdio: ["ignore", "inherit", "inherit"],
   });

@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { EGG_BRAIN, EGG_MEMORY_DIR } from "../config.js";
+import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL } from "../config.js";
 import { logBrainStart, logBrainEnd } from "../logger.js";
 
 function getContextBlock(): string {
@@ -73,7 +73,7 @@ export async function callBrain(opts: {
   logBrainStart(prompt);
   const brainStartTime = Date.now();
 
-  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"];
+  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions", "--model", EGG_MODEL];
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(EGG_BRAIN, args, {
