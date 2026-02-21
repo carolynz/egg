@@ -139,6 +139,7 @@ async function captionImage(filepath: string): Promise<string> {
         ],
       });
 
+      recordTokenUsage("claude-haiku-4-5-20251001", response.usage.input_tokens, response.usage.output_tokens);
       const textBlock = response.content.find((b) => b.type === "text");
       const description = textBlock && "text" in textBlock ? textBlock.text.trim() : "";
       console.log("[attach] caption:", description);
@@ -179,6 +180,7 @@ export class ShellLoop {
   private seenSet: Set<number>;
   private userPhoneNorm: string;
   private running = false;
+  private lastDailySummaryDate: string = loadTokenState().lastSentDate;
 
   constructor(bbOnly: boolean) {
     this.bb = new BlueBubblesClient();
@@ -617,6 +619,23 @@ export class ShellLoop {
     return success;
   }
 
+  private async checkDailySummary(): Promise<void> {
+    if (getPacificHour() !== 23) return;
+    const today = getPacificDate();
+    if (this.lastDailySummaryDate === today) return;
+
+    this.lastDailySummaryDate = today;
+    saveTokenState({ lastSentDate: today });
+
+    const summary = getDailySummary(today);
+    const msgs = formatSummaryMessages(summary);
+    console.log(`[token-tracker] sending daily summary: ${msgs[0]}`);
+    for (const msg of msgs) {
+      await this.sender.send(msg);
+    }
+    logApiSpend(formatSummaryLogLine(summary));
+  }
+
   async run(): Promise<void> {
     this.running = true;
 
@@ -638,6 +657,7 @@ export class ShellLoop {
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {
       try {
+        await this.checkDailySummary();
         await this.pollOnce();
       } catch (err) {
         console.error("Poll error:", err);

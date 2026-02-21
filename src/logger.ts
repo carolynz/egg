@@ -55,3 +55,7 @@ export function logTaskEnd(
 ): void {
   appendLog(TASKS_LOG, `TASK END    | ${filename} exit=${exitCode ?? "?"} duration=${durationSec}s`);
 }
+
+export function logApiSpend(summary: string): void {
+  appendLog(TASKS_LOG, summary);
+}
