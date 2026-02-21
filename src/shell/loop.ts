@@ -436,7 +436,6 @@ export class ShellLoop {
     );
 
     if (newMsgs.length === 0) {
-      console.log(`[poll] no new messages`);
       if (maxRowid > this.state.lastRowid) {
         this.state.lastRowid = maxRowid;
         this.persist();
