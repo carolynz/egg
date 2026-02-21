@@ -568,37 +568,18 @@ export class ShellLoop {
     console.log(`[brain] === PROMPT END ===`);
 
     let reply: string;
-    const brainOpts = {
-      history: this.state.history.slice(0, -1), // exclude the just-added user msg
-      message: combinedText,
-      runningTasks: this.taskRunner.runningTaskSummaries,
-    };
     try {
-      reply = await callBrain(brainOpts);
+      reply = await callBrain({
+        history: this.state.history.slice(0, -1), // exclude the just-added user msg
+        message: combinedText,
+        runningTasks: this.taskRunner.runningTaskSummaries,
+      });
     } catch (err) {
       console.error("Brain call failed:", err);
-
-      // Retry once after 2 seconds
-      console.log("[brain] retrying...");
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        reply = await callBrain(brainOpts);
-      } catch (err2) {
-        console.error("Brain retry failed:", err2);
-
-        // Fallback without --model flag
-        console.log("[brain] falling back without --model...");
-        try {
-          reply = await callBrain({ ...brainOpts, skipModel: true });
-        } catch (err3) {
-          console.error("[brain] all retries failed, sending error to user");
-          await this.sendReply("brain glitched, try again in a sec");
-          await this.bb.stopTyping();
-          this.state.pendingMessage = null;
-          this.persist();
-          return false;
-        }
-      }
+      await this.bb.stopTyping();
+      this.state.pendingMessage = null;
+      this.persist();
+      return false;
     }
 
     if (!reply) {

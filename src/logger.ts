@@ -39,16 +39,6 @@ export function logBrainStart(prompt: string): void {
   appendLog(BRAIN_LOG, `BRAIN START | ${preview}`);
 }
 
-export function logBrainThinking(text: string): void {
-  try {
-    ensureLogDir();
-    // Append raw thinking text without extra timestamp (already in a START/END block)
-    appendFileSync(BRAIN_LOG, text.endsWith("\n") ? text : text + "\n");
-  } catch {
-    // best-effort
-  }
-}
-
 export function logBrainEnd(exitCode: number | null, durationMs: number): void {
   const dur = Math.round(durationMs / 1000);
   appendLog(BRAIN_LOG, `BRAIN END   | exit=${exitCode ?? "?"} duration=${dur}s`);
