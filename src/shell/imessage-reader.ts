@@ -10,7 +10,9 @@ const EMAIL_RE = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
 // Matches Objective-C class names (NS*) and NSArchiver/NSKeyedArchiver binary
 // serialization headers: "streamtyped" (NSArchiver), "typedstream" (NSTypedStream),
 // "bplist" (binary plist used by NSKeyedArchiver).
-const NS_CLASS_RE = /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/g;
+// No \b word boundary — bplist type-byte markers (X, W, T, Z) are ASCII letters and
+// immediately precede NS class names (e.g. "XNSObject"), so a word boundary never fires.
+const NS_CLASS_RE = /NS[A-Z]\w*|streamtyped|typedstream|bplist\S*/g;
 
 // Magic bytes for NSKeyedArchiver binary plist: ASCII "bplist00"
 const BPLIST_MAGIC = Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30]);
@@ -19,58 +21,45 @@ const BPLIST_MAGIC = Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30
 // These strings never appear in legitimate user messages.
 const NSKEYEDARCHIVER_KEY_RE = /\$classname|\$classes|\$archiver|\$objects|\$version/;
 
+// bplist binary indicators: type-byte-prefixed NS class names and structural keys that
+// appear as ASCII substrings in NSDate/NSValue blobs.
+// Pattern: bplist integer/string type byte ('Z', 'X', 'W', 'T') immediately before a
+// well-known NSKeyedArchiver key or Apple class name.
+// These never appear in legitimate user messages.
+const BPLIST_BINARY_RE = /Z\$classname|XNSObject|XNSDate|XNSValue|WNSValue|WNSDate/;
+
 function hasNSClassArtifacts(text: string): boolean {
-  return /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/.test(text);
+  // No \b — bplist type bytes are letters and directly precede NS class names
+  return /NS[A-Z]\w*|streamtyped|typedstream|bplist\S*/.test(text);
 }
 
 /**
- * Detect and strip NSKeyedArchiver binary plist blobs from a text string.
+ * Detect and replace NSKeyedArchiver binary plist blobs in a text string.
  * iOS sometimes encodes date-like strings (e.g. "tomorrow") as NSDate objects
  * serialized as binary plists, which arrive as binary garbage in chat.db text.
  *
- * Two detection paths:
+ * Detection paths (any one is sufficient):
  *  1. Text starts with "bplist00" — the binary plist magic header decoded intact.
  *  2. Text contains NSKeyedArchiver structural keys ($classname, $classes, etc.)
  *     even without the magic prefix — this happens when the leading bytes of the
- *     bplist are invalid UTF-8 and get replaced with U+FFFD by SQLite/better-sqlite3,
- *     so the string starts with \ufffd instead of "bplist00".
+ *     bplist are invalid UTF-8 and get replaced with U+FFFD by SQLite/better-sqlite3.
+ *  3. Text contains bplist type-byte-prefixed class names (XNSObject, XNSDate, etc.)
+ *     or the Z$classname structural key — these never appear in normal user text.
+ *
+ * When any indicator is detected the ENTIRE text is replaced with "[date]".
+ * No segment-recovery is attempted: bplist blobs contain only binary structure and
+ * class metadata — there is no recoverable user text.
  */
 function stripBplistBlob(text: string): string {
-  const startsWithBplist = text.startsWith("bplist00");
-  // Detect NSKeyedArchiver blobs that lost their magic prefix via UTF-8 replacement
-  const hasNSKAKeys = !startsWithBplist && NSKEYEDARCHIVER_KEY_RE.test(text);
-
-  if (!startsWithBplist && !hasNSKAKeys) return text;
-
-  if (hasNSKAKeys) {
-    console.warn(
-      "[parse] text field contains NSKeyedArchiver keys (no bplist00 prefix) — binary date blob detected",
-    );
+  if (
+    text.startsWith("bplist00") ||
+    NSKEYEDARCHIVER_KEY_RE.test(text) ||
+    BPLIST_BINARY_RE.test(text)
+  ) {
+    console.warn("[parse] text field is NSKeyedArchiver/bplist blob — replacing with [date]");
+    return "[date]";
   }
-
-  // Try to recover any readable text segments (ASCII-only to avoid \ufffd garbage).
-  // In bplist format, string values are stored as raw bytes — e.g. "tomorrow" appears
-  // as `Xtomorrow` where 0x58 is the bplist "8-byte ASCII string" marker. After
-  // NS* class names and structural keys are filtered out, nothing useful remains
-  // for a pure NSDate message, so we fall through to returning [date].
-  const segments = text.match(/[\x20-\x7e]{4,}/g);
-  if (segments) {
-    const clean = segments.filter(
-      (s) =>
-        !hasNSClassArtifacts(s) &&
-        !NSKEYEDARCHIVER_KEY_RE.test(s) &&
-        !s.includes("__kIM") &&
-        !s.startsWith("bplist") &&
-        !/^\$/.test(s),
-    );
-    if (clean.length > 0) {
-      console.warn("[parse] stripped NSKeyedArchiver/bplist blob from text field, kept readable segments");
-      return clean.join(" ").trim();
-    }
-  }
-
-  console.warn("[parse] text field is NSKeyedArchiver/bplist blob — replacing with [date]");
-  return "[date]";
+  return text;
 }
 
 export interface Attachment {
@@ -294,6 +283,14 @@ export function getEggMessages(
         if (!/[\x20-\x7e\u00a0-\ufffa]/.test(text) && !hasAttachments) continue;
       }
 
+      // Final safety net: if text still contains NSKeyedArchiver/bplist binary markers
+      // after all processing, replace entirely.  This catches any path that bypassed
+      // stripBplistBlob (e.g. content sourced from attributedBody or indirect decoding).
+      if (text && (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text))) {
+        console.warn("[parse] final safety: text still contains NS/bplist artifacts — replacing with [date]");
+        text = "[date]";
+      }
+
       // Reply-to context: if this message is a reply, prepend the original text
       if (row.thread_originator_guid && text) {
         try {
@@ -302,11 +299,11 @@ export function getEggMessages(
             attributedBody: Buffer | null;
           } | undefined;
           if (orig) {
-            let origText = orig.text;
+            let origText = orig.text ? stripBplistBlob(orig.text) : orig.text;
             const origAttr = orig.attributedBody
               ? decodeAttributedBody(orig.attributedBody)
               : null;
-            if (origAttr && (!origText || origAttr.length > origText.length)) {
+            if (origAttr && !hasNSClassArtifacts(origAttr) && (!origText || origAttr.length > origText.length)) {
               origText = origAttr;
             }
             if (origText) {
