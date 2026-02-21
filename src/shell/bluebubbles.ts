@@ -1,8 +1,10 @@
 import { randomUUID } from "crypto";
+import { readFileSync } from "fs";
+import { basename } from "path";
 import {
   BLUEBUBBLES_URL,
   BLUEBUBBLES_PASSWORD,
-  EGG_USER_PHONE,
+  getEggUserPhone,
 } from "../config.js";
 
 function encodeGuid(guid: string): string {
@@ -20,7 +22,8 @@ export class BlueBubblesClient {
   constructor() {
     this.baseUrl = BLUEBUBBLES_URL;
     this.password = BLUEBUBBLES_PASSWORD;
-    this.chatGuid = EGG_USER_PHONE ? `iMessage;-;${EGG_USER_PHONE}` : "";
+    const phone = getEggUserPhone();
+    this.chatGuid = phone ? `iMessage;-;${phone}` : "";
     this.chatGuidEncoded = encodeGuid(this.chatGuid);
   }
 
@@ -122,5 +125,35 @@ export class BlueBubblesClient {
   async markRead(): Promise<void> {
     if (!this.available || !this.privateApi || !this.chatGuid) return;
     await this.post(`/api/v1/chat/${this.chatGuidEncoded}/read`);
+  }
+
+  async sendAttachment(filepath: string): Promise<boolean> {
+    if (!this.available || !this.chatGuid) return false;
+
+    const fileData = readFileSync(filepath);
+    const filename = basename(filepath);
+    const form = new FormData();
+    form.append("chatGuid", this.chatGuid);
+    form.append("name", filename);
+    form.append("method", this.privateApi ? "private-api" : "apple-script");
+    form.append("tempGuid", `temp-${randomUUID()}`);
+    form.append("attachment", new Blob([fileData], { type: "image/png" }), filename);
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/message/attachment?${this.params()}`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        console.warn(`BlueBubbles sendAttachment → ${resp.status}: ${body.slice(0, 200)}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error("BlueBubbles sendAttachment failed:", err);
+      return false;
+    }
   }
 }

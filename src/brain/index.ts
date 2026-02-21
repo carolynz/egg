@@ -1,12 +1,36 @@
 import { spawn } from "child_process";
 import { EGG_BRAIN, EGG_MEMORY_DIR } from "../config.js";
 
+function getContextBlock(): string {
+  const now = new Date();
+
+  // ISO 8601 timestamp with local UTC offset (e.g. 2026-02-20T21:15:00-05:00)
+  const tzOffsetMins = -now.getTimezoneOffset(); // positive = east of UTC
+  const sign = tzOffsetMins >= 0 ? "+" : "-";
+  const absOffset = Math.abs(tzOffsetMins);
+  const offsetHH = String(Math.floor(absOffset / 60)).padStart(2, "0");
+  const offsetMM = String(absOffset % 60).padStart(2, "0");
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const isoTimestamp =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}` +
+    `${sign}${offsetHH}:${offsetMM}`;
+
+  // IANA timezone name (e.g. "America/New_York") — best available location proxy
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  return `# context\nCurrent time: ${isoTimestamp}\nTimezone / location: ${timezone}\n`;
+}
+
 export async function callBrain(opts: {
   history: { role: string; content: string }[];
   message: string;
 }): Promise<string> {
   // Format conversation history + new message as a single prompt
   const lines: string[] = [];
+
+  lines.push(getContextBlock());
 
   if (opts.history.length > 0) {
     lines.push("Recent conversation history:");
@@ -19,11 +43,22 @@ export async function callBrain(opts: {
 
   lines.push(`[human] ${opts.message}`);
   lines.push("");
-  lines.push("Respond as Egg. Each line of your response will be sent as a separate text message.");
+  lines.push(
+    "Respond as Egg. Each line of your response will be sent as a separate text message.\n" +
+    "If a visual would genuinely help (e.g., workout form, exercise demonstration), include [IMAGE: <detailed description>] on its own line. " +
+    "Only use images when they add real value — keep descriptions specific and concrete.\n" +
+    "If the user is requesting a timer (e.g. 'set a timer for 90 seconds', 'rest timer 2 min', 'timer 30s'), " +
+    "include a timer marker on its own line: [TIMER: <value><unit>: <follow-up message>] " +
+    "where unit is s/m/h and the follow-up message is contextually relevant (e.g. 'rest over — next set!'). " +
+    "The marker is stripped before sending — only your other reply lines reach the user."
+  );
 
-  const prompt = lines.join("\n");
+  // Strip null bytes and other control chars that break child_process.spawn args
+  const prompt = lines.join("\n").replace(/\x00/g, "").replace(/[\x01-\x08\x0e-\x1f]/g, "");
 
-  const args = ["-p", prompt, "--output-format", "text"];
+  console.log(`[brain] calling claude with ${opts.history.length} history messages + current message (${opts.message.length} chars)`);
+
+  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"];
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(EGG_BRAIN, args, {
@@ -36,7 +71,12 @@ export async function callBrain(opts: {
     const errChunks: Buffer[] = [];
 
     child.stdout.on("data", (data: Buffer) => chunks.push(data));
-    child.stderr.on("data", (data: Buffer) => errChunks.push(data));
+    child.stderr.on("data", (data: Buffer) => {
+      errChunks.push(data);
+      // Stream brain stderr in real-time for thinking traces
+      const line = data.toString("utf-8");
+      if (line.trim()) process.stderr.write(`[brain] ${line}`);
+    });
 
     child.on("error", (err) => reject(err));
 

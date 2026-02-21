@@ -1,11 +1,25 @@
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
-import { CHAT_DB, EGG_APPLE_ID } from "../config.js";
+import { homedir } from "os";
+import { CHAT_DB, getEggAppleId } from "../config.js";
 
 const LOOKBACK_ROWS = 10;
 
 const PHONE_RE = /\+?\d[\d\s\-()]{7,}\d/g;
 const EMAIL_RE = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
+// Matches Objective-C class names (NS*) and NSArchiver/NSKeyedArchiver binary
+// serialization headers: "streamtyped" (NSArchiver), "typedstream" (NSTypedStream),
+// "bplist" (binary plist used by NSKeyedArchiver).
+const NS_CLASS_RE = /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/g;
+
+function hasNSClassArtifacts(text: string): boolean {
+  return /\bNS[A-Z]\w*|\bstreamtyped\b|\btypedstream\b|\bbplist\S*/.test(text);
+}
+
+export interface Attachment {
+  filename: string;
+  mimeType: string;
+}
 
 export interface Message {
   text: string;
@@ -16,6 +30,7 @@ export interface Message {
   sender: string;
   reactionType: number | null;
   reactionTarget: string | null;
+  attachments?: Attachment[];
 }
 
 function scrubText(text: string): string {
@@ -25,30 +40,43 @@ function scrubText(text: string): string {
 function decodeAttributedBody(blob: Buffer): string | null {
   if (!blob || blob.length === 0) return null;
   try {
-    const markers = [Buffer.from([0x2b, 0x00]), Buffer.from([0x2a, 0x00])];
-    for (const marker of markers) {
+    // Ported from Python egg-me-on: find text between known markers in the
+    // NSKeyedArchiver typedstream blob, with a regex fallback.
+    const END_MARKERS = [Buffer.from([0x86, 0x84]), Buffer.from([0x00, 0x00, 0x00])];
+    const STREAM_MARKERS = [Buffer.from([0x2b, 0x00]), Buffer.from([0x2a, 0x00])];
+
+    for (const marker of STREAM_MARKERS) {
       const idx = blob.indexOf(marker);
       if (idx === -1) continue;
+
       const start = idx + marker.length;
       const candidate = blob.subarray(start);
-      const endMarkers = [Buffer.from([0x86, 0x84]), Buffer.from([0x00, 0x00, 0x00])];
+
       let textBytes = candidate;
-      for (const em of endMarkers) {
+      for (const em of END_MARKERS) {
         const endIdx = candidate.indexOf(em);
         if (endIdx > 0) {
           textBytes = candidate.subarray(0, endIdx);
           break;
         }
       }
-      const decoded = textBytes.toString("utf-8").trim();
-      if (decoded.length > 0) return decoded;
+
+      const text = textBytes.toString("utf-8").replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
+      // Reject results that are iMessage internal metadata or NSKeyedArchiver binary artifacts
+      if (text && !text.includes("__kIM") && !hasNSClassArtifacts(text)) return text;
     }
-    // Fallback: find longest printable segment
+
+    // Fallback: decode entire blob as UTF-8, find longest printable segment.
+    // Filter out iMessage internal metadata strings.
     const decoded = blob.toString("utf-8");
     const segments = decoded.match(/[\x20-\x7e\u00a0-\uffff]{10,}/g);
     if (segments) {
-      return segments.reduce((a, b) => (a.length >= b.length ? a : b)).trim();
+      const clean = segments.filter((s) => !s.includes("__kIM") && !hasNSClassArtifacts(s));
+      if (clean.length > 0) {
+        return clean.reduce((a, b) => (a.length >= b.length ? a : b)).trim();
+      }
     }
+
     return null;
   } catch {
     return null;
@@ -59,13 +87,14 @@ export function getEggMessages(
   sinceRowid: number,
   seenRowids: Set<number>,
 ): { messages: Message[]; maxRowid: number } {
-  if (!EGG_APPLE_ID) return { messages: [], maxRowid: sinceRowid };
+  const eggAppleId = getEggAppleId();
+  if (!eggAppleId) return { messages: [], maxRowid: sinceRowid };
   if (!existsSync(CHAT_DB)) return { messages: [], maxRowid: sinceRowid };
 
   const querySince = Math.max(0, sinceRowid - LOOKBACK_ROWS);
 
   try {
-    const db = new Database(CHAT_DB, { readonly: true, fileMustExist: true });
+    const db = new Database(CHAT_DB, { fileMustExist: true });
     db.pragma("query_only = ON");
 
     const rows = db
@@ -79,7 +108,9 @@ export function getEggMessages(
           m.guid,
           h.id as sender_handle,
           m.associated_message_type,
-          m.associated_message_guid
+          m.associated_message_guid,
+          m.cache_has_attachments,
+          m.thread_originator_guid
         FROM message m
         LEFT JOIN handle h ON m.handle_id = h.ROWID
         WHERE m.ROWID > ?
@@ -87,7 +118,7 @@ export function getEggMessages(
         ORDER BY m.date ASC
         LIMIT 100`,
       )
-      .all(querySince, `%${EGG_APPLE_ID}%`) as Array<{
+      .all(querySince, `%${eggAppleId}%`) as Array<{
       ROWID: number;
       text: string | null;
       attributedBody: Buffer | null;
@@ -97,7 +128,20 @@ export function getEggMessages(
       sender_handle: string | null;
       associated_message_type: number | null;
       associated_message_guid: string | null;
+      cache_has_attachments: number;
+      thread_originator_guid: string | null;
     }>;
+
+    const attachmentStmt = db.prepare(
+      `SELECT a.filename, a.mime_type, a.transfer_state
+       FROM attachment a
+       JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+       WHERE maj.message_id = ?`,
+    );
+
+    const replyLookupStmt = db.prepare(
+      `SELECT text, attributedBody FROM message WHERE guid = ? LIMIT 1`,
+    );
 
     const messages: Message[] = [];
     let maxRowid = sinceRowid;
@@ -107,14 +151,109 @@ export function getEggMessages(
 
       if (seenRowids.has(row.ROWID)) continue;
 
-      let text = row.text;
-      if (!text && row.attributedBody) {
-        text = decodeAttributedBody(row.attributedBody);
+      // Query attachments if present
+      let attachments: Attachment[] | undefined;
+      if (row.cache_has_attachments) {
+        const attRows = attachmentStmt.all(row.ROWID) as Array<{
+          filename: string | null;
+          mime_type: string | null;
+          transfer_state: number | null;
+        }>;
+        const valid = attRows
+          .filter((a) => a.filename && a.transfer_state === 5)
+          .map((a) => ({
+            filename: a.filename!.replace(/^~/, homedir()),
+            mimeType: a.mime_type ?? "application/octet-stream",
+          }));
+        if (valid.length > 0) attachments = valid;
       }
-      if (!text) continue;
 
-      text = scrubText(text);
-      if (text.startsWith("__kIM")) continue;
+      let text = row.text;
+      const attrText = row.attributedBody
+        ? decodeAttributedBody(row.attributedBody)
+        : null;
+      // Prefer whichever source gives the longer text — row.text can be
+      // truncated or null on newer macOS, and attributedBody has the full content.
+      // But reject attrText that looks like iMessage internal metadata.
+      if (
+        attrText &&
+        !attrText.includes("__kIM") &&
+        !hasNSClassArtifacts(attrText) &&
+        (!text || attrText.length > text.length)
+      ) {
+        text = attrText;
+      }
+
+      // For attachment-only messages, text may be null or just \ufffc
+      const hasAttachments = attachments && attachments.length > 0;
+      if (!text && !hasAttachments) continue;
+
+      const isPlaceholderOnly = text ? /^\s*\ufffc\s*$/.test(text) : false;
+      if (isPlaceholderOnly && !hasAttachments) continue;
+
+      // If text is binary metadata from an attachment-only message, discard it
+      if (text && text.includes("__kIM")) {
+        if (hasAttachments) {
+          text = "";
+        } else {
+          continue;
+        }
+      }
+
+      // Strip non-printable chars and \ufffc placeholders
+      if (text) {
+        // Remove everything outside printable ASCII + common unicode
+        text = text.replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, "");
+        text = text.replace(/\ufffc/g, "");
+        text = text.replace(NS_CLASS_RE, "");
+        // Strip invisible Unicode formatting characters
+        const stripped = text.replace(
+          /[\u200B-\u200D\uFEFF\u00AD\u2060\u200C\u200F\u202A-\u202E\u2066-\u206F]/g,
+          "",
+        );
+        if (stripped !== text) {
+          console.warn("[parse] stripped invisible unicode chars from message");
+          text = stripped;
+        }
+        text = text.trim();
+      }
+
+      // If text is empty after stripping, set to empty string (attachments carry the content)
+      if (!text) text = "";
+
+      if (text) {
+        text = scrubText(text);
+        // Skip messages that are only whitespace or control characters
+        if (!/[\x20-\x7e\u00a0-\ufffa]/.test(text) && !hasAttachments) continue;
+      }
+
+      // Reply-to context: if this message is a reply, prepend the original text
+      if (row.thread_originator_guid && text) {
+        try {
+          const orig = replyLookupStmt.get(row.thread_originator_guid) as {
+            text: string | null;
+            attributedBody: Buffer | null;
+          } | undefined;
+          if (orig) {
+            let origText = orig.text;
+            const origAttr = orig.attributedBody
+              ? decodeAttributedBody(orig.attributedBody)
+              : null;
+            if (origAttr && (!origText || origAttr.length > origText.length)) {
+              origText = origAttr;
+            }
+            if (origText) {
+              const truncated =
+                origText.length > 100
+                  ? origText.slice(0, 100) + "…"
+                  : origText;
+              text = `[replying to: "${truncated}"] ${text}`;
+            }
+          }
+        } catch {
+          // Original message not found or lookup failed — skip annotation
+        }
+      }
 
       const ts = row.unix_timestamp;
       const time = ts
@@ -141,6 +280,7 @@ export function getEggMessages(
         sender: row.sender_handle ?? "",
         reactionType,
         reactionTarget,
+        attachments,
       });
     }
 

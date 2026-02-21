@@ -7,6 +7,7 @@ export interface ShellState {
   seenRowids: number[];
   history: { role: string; content: string }[];
   pendingMessage: string | null;
+  restarting: boolean;
 }
 
 const DEFAULTS: ShellState = {
@@ -14,6 +15,7 @@ const DEFAULTS: ShellState = {
   seenRowids: [],
   history: [],
   pendingMessage: null,
+  restarting: false,
 };
 
 export function loadState(): ShellState {

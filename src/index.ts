@@ -10,6 +10,7 @@ import {
   NUDGES_SENT_DIR,
   QUIET_START,
   QUIET_END,
+  checkMemoryDir,
 } from "./config.js";
 import { Sender } from "./shell/sender.js";
 import { BlueBubblesClient } from "./shell/bluebubbles.js";
@@ -26,6 +27,7 @@ program
   .description("Start the iMessage poll loop")
   .option("--bb-only", "Only use BlueBubbles for sending (no AppleScript fallback)")
   .action(async (opts: { bbOnly?: boolean }) => {
+    checkMemoryDir();
     const loop = new ShellLoop(opts.bbOnly ?? false);
     await loop.init();
     await loop.run();
@@ -37,6 +39,7 @@ program
   .description("Ask the brain if a nudge is warranted right now")
   .option("--dry-run", "Print brain output without writing a nudge file")
   .action(async (opts: { dryRun?: boolean }) => {
+    checkMemoryDir();
     // Quiet hours check
     const hour = new Date().getHours();
     if (hour >= QUIET_START || hour < QUIET_END) {
@@ -58,6 +61,15 @@ program
       console.log("\nBrain output:");
       console.log(reply);
       return;
+    }
+
+    // Skip if nudges are already queued — prevents duplicate delivery from frequent cron runs
+    if (existsSync(NUDGES_DIR)) {
+      const pending = readdirSync(NUDGES_DIR).filter((f) => f.endsWith(".md"));
+      if (pending.length > 0) {
+        console.log(`${pending.length} pending nudge(s) already queued — skipping`);
+        return;
+      }
     }
 
     await callBrain({ history: [], message: prompt });
@@ -89,20 +101,22 @@ async function deliverNudges(sender: Sender): Promise<void> {
   }
 }
 
-// ── sense ──
-const sense = program.command("sense").description("Run a sense intake");
+// ── intake ──
+const intake = program.command("intake").description("Run data intake");
 
-sense
+intake
   .command("imessage")
-  .description("Intake iMessage history and update dossiers")
+  .description("Process iMessage history — create/update dossiers and MEMORY.md, then commit and push")
   .action(async () => {
+    checkMemoryDir();
     await senseImessage();
   });
 
-sense
+intake
   .command("daily")
   .description("Generate a daily context digest")
   .action(async () => {
+    checkMemoryDir();
     await senseDaily();
   });
 
