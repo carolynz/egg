@@ -29,6 +29,22 @@ coming soon... not yet ready for public consumption
 
 Two repos, two machines, one brain.
 
+```
+┌──────────────────────┐       git push/pull        ┌──────────────────────┐
+│    Personal Laptop   │◄──────────────────────────►│       Mac Mini       │
+│                      │                            │                      │
+│  egg intake imessage │     ┌────────────────┐     │  egg serve           │
+│  egg intake daily    │────►│  egg-memory    │◄────│  egg nudge (cron)    │
+│                      │     │  (GitHub)      │     │                      │
+│  chat.db (personal)  │     │  SOUL.md       │     │  chat.db (Egg's)     │
+│                      │     │  MEMORY.md     │     │  BlueBubbles         │
+│                      │     │  people/*.md   │     │  2nd Apple ID        │
+│                      │     │  goals.yaml    │     │                      │
+│                      │     │  daily/        │     │                      │
+│                      │     └────────────────┘     │                      │
+└──────────────────────┘                            └──────────────────────┘
+```
+
 ### The two repos
 
 - **egg** (this repo, public) — the code: shell, brain wrapper, intake commands
@@ -58,22 +74,6 @@ Both machines have:
 - A cron job that `git pull`s egg-memory regularly to stay in sync
 
 The `.egg-state.json` file (poll state, conversation history) is gitignored — each machine has its own local state. The shared data (dossiers, memory, goals, nudges) syncs through git.
-
-```
-┌─────────────────────┐       git push/pull       ┌─────────────────────┐
-│    Personal Laptop   │◄─────────────────────────►│      Mac Mini        │
-│                      │                           │                      │
-│  egg intake imessage │     ┌───────────────┐     │  egg serve           │
-│  egg intake daily    │────►│  egg-memory    │◄────│  egg nudge (cron)    │
-│                      │     │  (GitHub)      │     │                      │
-│  chat.db (personal)  │     │  SOUL.md       │     │  chat.db (Egg's)     │
-│                      │     │  MEMORY.md     │     │  BlueBubbles         │
-│                      │     │  people/*.md   │     │  2nd Apple ID        │
-│                      │     │  goals.yaml    │     │                      │
-│                      │     │  daily/        │     │                      │
-│                      │     └───────────────┘     │                      │
-└─────────────────────┘                           └─────────────────────┘
-```
 
 ## Prerequisites
 
