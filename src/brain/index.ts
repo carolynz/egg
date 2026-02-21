@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL } from "../config.js";
-import { logBrainStart, logBrainEnd } from "../logger.js";
+import { logBrainStart, logBrainEnd, logBrainThinking } from "../logger.js";
 
 function getContextBlock(): string {
   const now = new Date();
@@ -28,6 +28,7 @@ export async function callBrain(opts: {
   history: { role: string; content: string }[];
   message: string;
   runningTasks?: { id: string; prompt: string; startedAt: Date }[];
+  skipModel?: boolean;
 }): Promise<string> {
   // Format conversation history + new message as a single prompt
   const lines: string[] = [];
@@ -73,13 +74,17 @@ export async function callBrain(opts: {
   logBrainStart(prompt);
   const brainStartTime = Date.now();
 
-  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions", "--model", EGG_MODEL];
+  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"];
+  if (!opts.skipModel) {
+    args.push("--model", EGG_MODEL);
+  }
+  args.push("--verbose");
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(EGG_BRAIN, args, {
       cwd: EGG_MEMORY_DIR,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, CLAUDECODE: "" },
     });
 
     const chunks: Buffer[] = [];
@@ -90,7 +95,10 @@ export async function callBrain(opts: {
       errChunks.push(data);
       // Stream brain stderr in real-time for thinking traces
       const line = data.toString("utf-8");
-      if (line.trim()) process.stderr.write(`[brain] ${line}`);
+      if (line.trim()) {
+        process.stderr.write(`[brain] ${line}`);
+        logBrainThinking(line);
+      }
     });
 
     child.on("error", (err) => reject(err));
