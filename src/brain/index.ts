@@ -56,6 +56,8 @@ export async function callBrain(opts: {
   lines.push("");
   lines.push(
     "Respond as Egg. Each line of your response will be sent as a separate text message.\n" +
+    "IMPORTANT: Keep casual conversational replies to 1–2 short lines. Match the user's message length. " +
+    "Only give longer responses when explaining something, answering a question, or when detail is genuinely needed.\n" +
     "If a visual would genuinely help (e.g., workout form, exercise demonstration), include [IMAGE: <detailed description>] on its own line. " +
     "Only use images when they add real value — keep descriptions specific and concrete.\n" +
     "If the user is requesting a timer (e.g. 'set a timer for 90 seconds', 'rest timer 2 min', 'timer 30s'), " +
