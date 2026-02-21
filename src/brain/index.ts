@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { EGG_BRAIN, EGG_MEMORY_DIR } from "../config.js";
+import { logBrainStart, logBrainEnd } from "../logger.js";
 
 function getContextBlock(): string {
   const now = new Date();
@@ -57,6 +58,8 @@ export async function callBrain(opts: {
   const prompt = lines.join("\n").replace(/\x00/g, "").replace(/[\x01-\x08\x0e-\x1f]/g, "");
 
   console.log(`[brain] calling claude with ${opts.history.length} history messages + current message (${opts.message.length} chars)`);
+  logBrainStart(prompt);
+  const brainStartTime = Date.now();
 
   const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"];
 
@@ -81,6 +84,7 @@ export async function callBrain(opts: {
     child.on("error", (err) => reject(err));
 
     child.on("close", (code) => {
+      logBrainEnd(code, Date.now() - brainStartTime);
       const stdout = Buffer.concat(chunks).toString("utf-8").trim();
       if (code !== 0) {
         const stderr = Buffer.concat(errChunks).toString("utf-8").trim();

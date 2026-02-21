@@ -1,4 +1,4 @@
-import { spawn, SpawnOptions } from "child_process";
+import { spawn } from "child_process";
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +10,7 @@ import { join } from "path";
 import { EGG_BRAIN, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir } from "../config.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState } from "./state.js";
+import { logTaskStart, logTaskEnd } from "../logger.js";
 
 interface RunningTask {
   id: string;
@@ -68,6 +69,7 @@ export class TaskRunner {
     const preview = prompt.slice(0, 200);
     console.log(`[task] spawning cc for task ${id}`);
     console.log(`Starting task ${id}: ${preview}`);
+    logTaskStart(`${id}.md`);
 
     // Ack to user
     const ack = `🔧 on it. task ${id}\n${preview}`;
@@ -111,6 +113,8 @@ export class TaskRunner {
       const duration = Math.round((Date.now() - task.startedAt.getTime()) / 1000);
       const output = Buffer.concat(stdout).toString("utf-8").trim();
       const errors = Buffer.concat(stderr).toString("utf-8").trim();
+
+      logTaskEnd(`${id}.md`, code, duration);
 
       if (this.cancelled.has(id)) {
         this.cancelled.delete(id);

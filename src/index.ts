@@ -16,6 +16,25 @@ import { Sender } from "./shell/sender.js";
 import { BlueBubblesClient } from "./shell/bluebubbles.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
+import { spawn } from "child_process";
+import { initLogFiles, BRAIN_LOG, TASKS_LOG } from "./logger.js";
+
+function tailLogFiles(): void {
+  initLogFiles();
+  for (const logPath of [BRAIN_LOG, TASKS_LOG]) {
+    const label = logPath.endsWith("brain.log") ? "brain" : "tasks";
+    const tail = spawn("tail", ["-F", logPath], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    tail.stdout!.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        process.stdout.write(`[log:${label}] ${line}\n`);
+      }
+    });
+    tail.unref();
+  }
+}
 
 const program = new Command();
 
@@ -28,6 +47,7 @@ program
   .option("--bb-only", "Only use BlueBubbles for sending (no AppleScript fallback)")
   .action(async (opts: { bbOnly?: boolean }) => {
     checkMemoryDir();
+    tailLogFiles();
     const loop = new ShellLoop(opts.bbOnly ?? false);
     await loop.init();
     await loop.run();

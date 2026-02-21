@@ -6,7 +6,7 @@ import { callBrain } from "../brain/index.js";
 import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { join, extname } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -358,6 +358,27 @@ export class ShellLoop {
     return false;
   }
 
+  private startNudgeWatcher(): void {
+    mkdirSync(NUDGES_DIR, { recursive: true });
+    let delivering = false;
+    const watcher = watch(NUDGES_DIR, async (event, filename) => {
+      if (!filename || !filename.endsWith(".md")) return;
+      if (delivering) return;
+      delivering = true;
+      // Small delay to ensure the file is fully written before we read it
+      await sleep(300);
+      try {
+        await this.deliverNudges();
+      } catch (err) {
+        console.error("[nudge-watcher] error delivering nudge:", err);
+      } finally {
+        delivering = false;
+      }
+    });
+    console.log(`[nudge-watcher] watching ${NUDGES_DIR}`);
+    process.on("exit", () => watcher.close());
+  }
+
   private async deliverNudges(): Promise<void> {
     if (!existsSync(NUDGES_DIR)) return;
     const files = readdirSync(NUDGES_DIR).filter((f) => f.endsWith(".md"));
@@ -378,8 +399,18 @@ export class ShellLoop {
 
       const filePath = join(NUDGES_DIR, file);
       const sentPath = join(NUDGES_SENT_DIR, file);
+
+      // Skip nudges older than 24 hours
+      const ageMs = Date.now() - statSync(filePath).mtimeMs;
+      if (ageMs > 24 * 60 * 60 * 1000) {
+        console.warn(`[nudge] skipping stale nudge ${file} (${Math.round(ageMs / 3_600_000)}h old)`);
+        renameSync(filePath, sentPath);
+        continue;
+      }
+
       const text = readFileSync(filePath, "utf-8").trim();
       if (!text) {
+        console.warn(`[nudge] skipping empty nudge file: ${file}`);
         renameSync(filePath, sentPath);
         continue;
       }
@@ -586,6 +617,7 @@ export class ShellLoop {
     process.on("SIGINT", shutdown);
 
     await this.handleStartupRecovery();
+    this.startNudgeWatcher();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {
