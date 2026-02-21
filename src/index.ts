@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "fs
 import { join } from "path";
 import { spawn } from "child_process";
 import { initLogFiles, BRAIN_LOG, TASKS_LOG } from "./logger.js";
+import { acquireLock } from "./lockfile.js";
 
 function tailLogFiles(): void {
   initLogFiles();
@@ -47,6 +48,7 @@ program
   .description("Start the iMessage poll loop")
   .option("--bb-only", "Only use BlueBubbles for sending (no AppleScript fallback)")
   .action(async (opts: { bbOnly?: boolean }) => {
+    acquireLock();
     checkMemoryDir();
     tailLogFiles();
     const loop = new ShellLoop(opts.bbOnly ?? false);
