@@ -1,15 +1,15 @@
 <img src="assets/egg-header-2.svg" width="100%" alt="Egg" />
 <img src="assets/egg-warning-2.svg" width="100%" alt="Warning" />
 
-# Egg
+# egg
 
-Egg is a local Mac daemon that "eggs me on" to become the best version of myself. It pushes me to stay on track, be more ambitious, and commit to the life I say I want.
+**egg** is an iMessage AI agent that "eggs me on" to become the best version of myself. It pushes me to stay on track, be more ambitious, and commit to the life I say I want.
 
-I made Egg because I wanted
+I probably could have customized OpenClaw to do this, but in this age of coding agents, it was easier to simply build exactly what I wanted:
 
-- to supplement my own willpower, through background processes + proactive nudges
-- an iMessage interface for Claude Code
-- to use my Claude Max plan so I can save on token spend when I feed Opus 4.6 a computer's worth of personal data
+1. to supplement my own willpower in a highly personalized way, through background processes + proactive nudges
+2. an iMessage interface for Claude Code
+3. to use my Claude Max plan so I can save on token spend when I feed Opus 4.6 a computer's worth of personal data
 
 ## DISCLAIMER
 
