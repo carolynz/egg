@@ -1,3 +1,6 @@
+<img src="assets/egg-header.svg" width="100%" alt="Egg" />
+<img src="assets/egg-warning.svg" width="100%" alt="Warning" />
+
 # Egg
 
 Egg is a local Mac daemon that "eggs you on" — it pushes you to take more risks, be more ambitious, and commit to the life you actually want. It works through iMessage: text Egg, get a reply from a bold personal AI agent backed by Claude.
