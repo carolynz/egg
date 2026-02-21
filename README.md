@@ -3,11 +3,17 @@
 
 # Egg
 
-Egg is a local Mac daemon that "eggs you on" — it pushes you to take more risks, be more ambitious, and commit to the life you actually want. It works through iMessage: text Egg, get a reply from a bold personal AI agent backed by Claude.
+Egg is a local Mac daemon that "eggs me on" to become the best version of myself. It pushes me to stay on track, be more ambitious, and commit to the life I say I want.
+
+I made Egg because I wanted
+
+- to supplement my own willpower, through background processes + proactive nudges
+- an iMessage interface for Claude Code
+- to use my Claude Max plan so I can save on token spend when I feed Opus 4.6 a computer's worth of personal data
 
 ## DISCLAIMER
 
-**This is a personal experiment. Use at your own risk.**
+**This is an ongoing personal experiment. Use at your own risk.**
 
 This software reads your iMessage database, spawns AI subprocesses, and sends messages from your Mac. It is provided as-is with absolutely no warranty. I am not responsible for any messages sent, data read, conversations had, life decisions made, or anything else that happens if you install this on your computer. If Egg tells you to quit your job and you do it, that's on you.
 
@@ -15,9 +21,13 @@ Seriously: this is my personal AI agent that I built for myself. You're welcome 
 
 ---
 
+## Quickstart
+
+coming soon... not yet ready for public consumption
+
 ## How it works
 
-Two repos, two machines.
+Two repos, two machines, one brain.
 
 ### The two repos
 
