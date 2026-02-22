@@ -132,6 +132,7 @@ async function getValidAccessToken(): Promise<string | null> {
 
 interface OuraState {
   lastNotifiedWakeDate: string | null;
+  lastOuraFollowUpDate: string | null;
 }
 
 const OURA_STATE_FILE = join(homedir(), ".egg", "oura-state.json");
@@ -140,7 +141,7 @@ function loadOuraState(): OuraState {
   try {
     return JSON.parse(readFileSync(OURA_STATE_FILE, "utf-8")) as OuraState;
   } catch {
-    return { lastNotifiedWakeDate: null };
+    return { lastNotifiedWakeDate: null, lastOuraFollowUpDate: null };
   }
 }
 
@@ -254,7 +255,18 @@ function buildReadinessLine(readinessScore: number | null): string {
   return `readiness ${readinessScore} — push hard, great day for strength training or a big ask`;
 }
 
-function buildGoodMorningMessage(data: {
+function buildGoodMorningMessage(): string {
+  const lines = [
+    "good morning",
+    "water before coffee",
+    "teeth + face (non-negotiable)",
+    "cat-cow + child's pose (2 min) — then set one intention for the day",
+    "open the Oura app so your sleep data syncs",
+  ];
+  return lines.join("\n");
+}
+
+function buildOuraFollowUpMessage(data: {
   sleepScore: number | null;
   readinessScore: number | null;
   totalSleepSeconds: number | null;
@@ -264,9 +276,6 @@ function buildGoodMorningMessage(data: {
   const lines = [
     buildSleepLine(data.sleepScore, data.totalSleepSeconds, data.avgHrv, data.avgHeartRate),
     buildReadinessLine(data.readinessScore),
-    "water before coffee",
-    "teeth + face (non-negotiable)",
-    "cat-cow + child's pose (2 min) — then set one intention for the day",
   ];
   return lines.join("\n");
 }
@@ -322,42 +331,8 @@ async function checkWakeUp(token: string): Promise<void> {
     logOura(`Time-based trigger (${hour}:xx in 7–9am window) — firing good morning nudge`);
   }
 
-  // Best available long sleep session for metrics
-  const latestLongSleep = recentWake ?? sessions
-    .filter((s) => s.type === "long_sleep" && s.bedtime_end != null)
-    .sort((a, b) => new Date(b.bedtime_end!).getTime() - new Date(a.bedtime_end!).getTime())[0] ?? null;
-
-  // Fetch sleep score
-  let sleepScore: number | null = null;
-  try {
-    const dailySleep = await fetchDailySleep(token, startDate);
-    const matchDay = latestLongSleep?.day ?? todayDate;
-    const match = dailySleep.find((d) => d.day === todayDate || d.day === matchDay);
-    sleepScore = match?.score ?? null;
-    logOura(`Sleep score: ${sleepScore}`);
-  } catch (err) {
-    logOura(`WARNING: Could not fetch daily sleep score: ${err}`);
-  }
-
-  // Fetch readiness score
-  let readinessScore: number | null = null;
-  try {
-    const dailyReadiness = await fetchDailyReadiness(token, startDate);
-    const match = dailyReadiness.find((d) => d.day === todayDate);
-    readinessScore = match?.score ?? null;
-    logOura(`Readiness score: ${readinessScore}`);
-  } catch (err) {
-    logOura(`WARNING: Could not fetch daily readiness: ${err}`);
-  }
-
-  // Write nudge file (each \n becomes a separate iMessage via sendReply)
-  const message = buildGoodMorningMessage({
-    sleepScore,
-    readinessScore,
-    totalSleepSeconds: latestLongSleep?.total_sleep_duration ?? null,
-    avgHrv: latestLongSleep?.average_hrv ?? null,
-    avgHeartRate: latestLongSleep?.average_heart_rate ?? null,
-  });
+  // Morning nudge: routine reminders only, no Oura data (hasn't synced yet)
+  const message = buildGoodMorningMessage();
 
   const timestamp = now.toISOString().replace(/[:.]/g, "-");
   const nudgeFile = join(NUDGES_DIR, `${timestamp}.md`);
@@ -370,6 +345,87 @@ async function checkWakeUp(token: string): Promise<void> {
     saveOuraState(state);
   } catch (err) {
     logOura(`ERROR writing nudge file: ${err}`);
+  }
+}
+
+// ── Oura follow-up: check for synced sleep data ──────────────────────────────
+
+async function checkOuraSync(token: string): Promise<void> {
+  const now = new Date();
+  const todayDate = now.toISOString().slice(0, 10);
+  const state = loadOuraState();
+
+  // Only run after morning nudge has been sent today
+  if (state.lastNotifiedWakeDate !== todayDate) return;
+
+  // Already sent follow-up today
+  if (state.lastOuraFollowUpDate === todayDate) return;
+
+  // Fetch today's daily_sleep data
+  let dailySleep: DailySleep[];
+  let dailyReadiness: DailyReadiness[];
+  try {
+    dailySleep = await fetchDailySleep(token, todayDate);
+  } catch (err) {
+    logOura(`Oura follow-up: could not fetch daily_sleep: ${err}`);
+    return;
+  }
+
+  const sleepMatch = dailySleep.find((d) => d.day === todayDate);
+  if (!sleepMatch || sleepMatch.score === null) {
+    logOura("Oura follow-up: no daily_sleep data for today yet — waiting for app sync");
+    return;
+  }
+
+  // Sleep data appeared — fetch readiness too
+  try {
+    dailyReadiness = await fetchDailyReadiness(token, todayDate);
+  } catch (err) {
+    logOura(`WARNING: Could not fetch daily readiness for follow-up: ${err}`);
+    dailyReadiness = [];
+  }
+
+  const readinessMatch = dailyReadiness.find((d) => d.day === todayDate);
+
+  // Fetch sleep session for duration/HRV metrics
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  let totalSleepSeconds: number | null = null;
+  let avgHrv: number | null = null;
+  let avgHeartRate: number | null = null;
+  try {
+    const sessions = await fetchSleepSessions(token, yesterday.toISOString().slice(0, 10));
+    const longSleep = sessions
+      .filter((s) => s.type === "long_sleep" && s.bedtime_end != null)
+      .sort((a, b) => new Date(b.bedtime_end!).getTime() - new Date(a.bedtime_end!).getTime())[0];
+    if (longSleep) {
+      totalSleepSeconds = longSleep.total_sleep_duration;
+      avgHrv = longSleep.average_hrv;
+      avgHeartRate = longSleep.average_heart_rate;
+    }
+  } catch (err) {
+    logOura(`WARNING: Could not fetch sleep sessions for follow-up: ${err}`);
+  }
+
+  const message = buildOuraFollowUpMessage({
+    sleepScore: sleepMatch.score,
+    readinessScore: readinessMatch?.score ?? null,
+    totalSleepSeconds,
+    avgHrv,
+    avgHeartRate,
+  });
+
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const nudgeFile = join(NUDGES_DIR, `${timestamp}.md`);
+
+  try {
+    mkdirSync(NUDGES_DIR, { recursive: true });
+    writeFileSync(nudgeFile, message);
+    logOura(`Oura follow-up nudge written: ${nudgeFile}`);
+    state.lastOuraFollowUpDate = todayDate;
+    saveOuraState(state);
+  } catch (err) {
+    logOura(`ERROR writing Oura follow-up nudge: ${err}`);
   }
 }
 
@@ -549,6 +605,7 @@ export class OuraPoller {
         return;
       }
       await checkWakeUp(token);
+      await checkOuraSync(token);
     } catch (err) {
       logOura(`ERROR in poll: ${err}`);
     }
