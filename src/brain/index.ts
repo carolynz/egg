@@ -1,6 +1,35 @@
 import { spawn } from "child_process";
-import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL } from "../config.js";
-import { logBrainStart, logBrainEnd } from "../logger.js";
+import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL, EGG_SESSION_MAX_AGE_MS } from "../config.js";
+import { logBrainStart, logBrainEnd, logBrainSession } from "../logger.js";
+
+// ── Session tracking ──
+// Stored in-process so the long-running shell loop reuses sessions automatically.
+// One-shot commands (nudge, intake) start fresh each invocation.
+let currentSessionId: string | null = null;
+let sessionCreatedAt = 0;
+
+export function clearBrainSession(): void {
+  if (currentSessionId) {
+    logBrainSession("clear", currentSessionId);
+  }
+  currentSessionId = null;
+  sessionCreatedAt = 0;
+}
+
+export function getBrainSessionId(): string | null {
+  return currentSessionId;
+}
+
+function isSessionValid(): boolean {
+  if (!currentSessionId) return false;
+  if (Date.now() - sessionCreatedAt > EGG_SESSION_MAX_AGE_MS) {
+    logBrainSession("expired", currentSessionId);
+    currentSessionId = null;
+    sessionCreatedAt = 0;
+    return false;
+  }
+  return true;
+}
 
 function getContextBlock(): string {
   const now = new Date();
@@ -24,12 +53,14 @@ function getContextBlock(): string {
   return `# context\nCurrent time: ${isoTimestamp}\nTimezone / location: ${timezone}\n`;
 }
 
-export async function callBrain(opts: {
-  history: { role: string; content: string }[];
-  message: string;
-  runningTasks?: { id: string; prompt: string; startedAt: Date }[];
-}): Promise<string> {
-  // Format conversation history + new message as a single prompt
+function buildPrompt(
+  opts: {
+    history: { role: string; content: string }[];
+    message: string;
+    runningTasks?: { id: string; prompt: string; startedAt: Date }[];
+  },
+  resuming: boolean,
+): string {
   const lines: string[] = [];
 
   lines.push(getContextBlock());
@@ -43,7 +74,8 @@ export async function callBrain(opts: {
     lines.push("");
   }
 
-  if (opts.history.length > 0) {
+  // Only include history when NOT resuming — the session already has it
+  if (!resuming && opts.history.length > 0) {
     lines.push("Recent conversation history:");
     for (const msg of opts.history) {
       const tag = msg.role === "user" ? "[human]" : "[egg]";
@@ -67,13 +99,50 @@ export async function callBrain(opts: {
   );
 
   // Strip null bytes and other control chars that break child_process.spawn args
-  const prompt = lines.join("\n").replace(/\x00/g, "").replace(/[\x01-\x08\x0e-\x1f]/g, "");
+  return lines.join("\n").replace(/\x00/g, "").replace(/[\x01-\x08\x0e-\x1f]/g, "");
+}
 
-  console.log(`[brain] calling claude with ${opts.history.length} history messages + current message (${opts.message.length} chars)`);
+interface BrainJsonOutput {
+  type?: string;
+  result?: string;
+  session_id?: string;
+}
+
+function parseJsonOutput(stdout: string): { reply: string; sessionId: string | null } {
+  // The CLI may output multiple newline-delimited JSON objects (streaming).
+  // Scan from the end for the "result" object.
+  const lines = stdout.trim().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj: BrainJsonOutput = JSON.parse(lines[i]);
+      if (obj.type === "result") {
+        return {
+          reply: obj.result ?? "",
+          sessionId: obj.session_id ?? null,
+        };
+      }
+    } catch {
+      // not valid JSON, skip
+    }
+  }
+
+  // Fallback: try parsing the entire stdout as one JSON object
+  try {
+    const obj: BrainJsonOutput = JSON.parse(stdout);
+    return {
+      reply: obj.result ?? stdout,
+      sessionId: obj.session_id ?? null,
+    };
+  } catch {
+    // Not JSON at all — treat entire stdout as plain text
+    console.warn("[brain] failed to parse JSON output, using raw stdout");
+    return { reply: stdout, sessionId: null };
+  }
+}
+
+function spawnBrainProcess(args: string[], prompt: string): Promise<string> {
   logBrainStart(prompt);
-  const brainStartTime = Date.now();
-
-  const args = ["-p", prompt, "--output-format", "text", "--dangerously-skip-permissions", "--model", EGG_MODEL];
+  const startTime = Date.now();
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(EGG_BRAIN, args, {
@@ -93,10 +162,13 @@ export async function callBrain(opts: {
       if (line.trim()) process.stderr.write(`[brain] ${line}`);
     });
 
-    child.on("error", (err) => reject(err));
+    child.on("error", (err) => {
+      logBrainEnd(null, Date.now() - startTime);
+      reject(err);
+    });
 
     child.on("close", (code) => {
-      logBrainEnd(code, Date.now() - brainStartTime);
+      logBrainEnd(code, Date.now() - startTime);
       const stdout = Buffer.concat(chunks).toString("utf-8").trim();
       if (code !== 0) {
         const stderr = Buffer.concat(errChunks).toString("utf-8").trim();
@@ -106,4 +178,75 @@ export async function callBrain(opts: {
       resolve(stdout);
     });
   });
+}
+
+export async function callBrain(opts: {
+  history: { role: string; content: string }[];
+  message: string;
+  runningTasks?: { id: string; prompt: string; startedAt: Date }[];
+}): Promise<string> {
+  const resuming = isSessionValid();
+  const prompt = buildPrompt(opts, resuming);
+
+  const sessionTag = resuming
+    ? ` [resuming ${currentSessionId!.slice(0, 8)}…]`
+    : " [fresh session]";
+  console.log(
+    `[brain] calling claude with ${opts.history.length} history messages + current message (${opts.message.length} chars)${sessionTag}`,
+  );
+
+  const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", EGG_MODEL];
+  if (resuming) {
+    args.push("--resume", currentSessionId!);
+  }
+
+  try {
+    const stdout = await spawnBrainProcess(args, prompt);
+    const { reply, sessionId: newSessionId } = parseJsonOutput(stdout);
+
+    // Update session tracking
+    if (newSessionId) {
+      if (!resuming) {
+        sessionCreatedAt = Date.now();
+        logBrainSession("new", newSessionId);
+      } else {
+        logBrainSession("reused", newSessionId);
+      }
+      currentSessionId = newSessionId;
+    }
+
+    return reply;
+  } catch (err) {
+    // If we were resuming, clear session and retry with a fresh one
+    if (resuming) {
+      console.warn("[brain] resume failed, retrying with fresh session");
+      logBrainSession("resume-failed", currentSessionId!);
+      clearBrainSession();
+
+      try {
+        const freshPrompt = buildPrompt(opts, false);
+        const freshArgs = [
+          "-p", freshPrompt, "--output-format", "json",
+          "--dangerously-skip-permissions", "--model", EGG_MODEL,
+        ];
+
+        const stdout = await spawnBrainProcess(freshArgs, freshPrompt);
+        const { reply, sessionId: newSessionId } = parseJsonOutput(stdout);
+
+        if (newSessionId) {
+          currentSessionId = newSessionId;
+          sessionCreatedAt = Date.now();
+          logBrainSession("new-after-retry", newSessionId);
+        }
+
+        return reply;
+      } catch (retryErr) {
+        clearBrainSession();
+        throw retryErr;
+      }
+    }
+
+    clearBrainSession();
+    throw err;
+  }
 }

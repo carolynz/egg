@@ -36,6 +36,9 @@ export const NUDGES_SENT_DIR = join(EGG_MEMORY_DIR, "nudges", "sent");
 export const QUIET_START = 23;
 export const QUIET_END = 8;
 
+// Session reuse: max age before forcing a fresh CC session (default 4 hours)
+export const EGG_SESSION_MAX_AGE_MS = parseInt(env("EGG_SESSION_MAX_AGE_MS") || "", 10) || 4 * 60 * 60 * 1000;
+
 // Heartbeat poller interval (default 30 minutes)
 export const HEARTBEAT_INTERVAL_MS = parseInt(env("HEARTBEAT_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 

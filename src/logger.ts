@@ -44,6 +44,10 @@ export function logBrainEnd(exitCode: number | null, durationMs: number): void {
   appendLog(BRAIN_LOG, `BRAIN END   | exit=${exitCode ?? "?"} duration=${dur}s`);
 }
 
+export function logBrainSession(action: string, sessionId: string): void {
+  appendLog(BRAIN_LOG, `SESSION     | ${action} session=${sessionId.slice(0, 12)}`);
+}
+
 export function logTaskStart(filename: string): void {
   appendLog(TASKS_LOG, `TASK START  | ${filename}`);
 }
