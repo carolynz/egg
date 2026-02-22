@@ -34,9 +34,40 @@ function hasNSClassArtifacts(text: string): boolean {
 }
 
 /**
- * Detect and replace NSKeyedArchiver binary plist blobs in a text string.
- * iOS sometimes encodes date-like strings (e.g. "tomorrow") as NSDate objects
- * serialized as binary plists, which arrive as binary garbage in chat.db text.
+ * Try to extract human-readable text from a string that contains
+ * NSKeyedArchiver/bplist binary data decoded as UTF-8.
+ * The actual user message text is stored as a string object inside the plist
+ * and appears as the longest printable segment after filtering out structural keys.
+ * Returns the extracted text, or null if no readable content found.
+ */
+function extractTextFromBplist(raw: string): string | null {
+  // Find all printable segments (min 4 chars to skip type bytes and short structural keys)
+  const segments = raw.match(/[\x20-\x7e\u00a0-\uffff]{4,}/g);
+  if (!segments) return null;
+
+  // Filter out NSKeyedArchiver structural keys and class names
+  const clean = segments.filter(
+    (s) =>
+      !NSKEYEDARCHIVER_KEY_RE.test(s) &&
+      !BPLIST_BINARY_RE.test(s) &&
+      !hasNSClassArtifacts(s) &&
+      !s.includes("__kIM") &&
+      !/^bplist\d+/.test(s) &&
+      !/^\$\w+$/.test(s),
+  );
+
+  if (clean.length === 0) return null;
+
+  // Return the longest clean segment — most likely the actual message text
+  const best = clean.reduce((a, b) => (a.length >= b.length ? a : b)).trim();
+  return best.length > 0 ? best : null;
+}
+
+/**
+ * Detect and handle NSKeyedArchiver binary plist blobs in a text string.
+ * iOS sometimes encodes date-like strings (e.g. "@ 12:30", "tomorrow") as NSDate
+ * objects serialized as binary plists, which arrive as binary garbage in chat.db text.
+ * The actual human-readable text IS embedded in the blob as a string object.
  *
  * Detection paths (any one is sufficient):
  *  1. Text starts with "bplist00" — the binary plist magic header decoded intact.
@@ -46,9 +77,8 @@ function hasNSClassArtifacts(text: string): boolean {
  *  3. Text contains bplist type-byte-prefixed class names (XNSObject, XNSDate, etc.)
  *     or the Z$classname structural key — these never appear in normal user text.
  *
- * When any indicator is detected the ENTIRE text is replaced with "[date]".
- * No segment-recovery is attempted: bplist blobs contain only binary structure and
- * class metadata — there is no recoverable user text.
+ * When any indicator is detected, first attempt to extract the readable text from
+ * the blob. Only fall back to "[date]" if no readable text can be recovered.
  */
 function stripBplistBlob(text: string): string {
   if (
@@ -56,6 +86,11 @@ function stripBplistBlob(text: string): string {
     NSKEYEDARCHIVER_KEY_RE.test(text) ||
     BPLIST_BINARY_RE.test(text)
   ) {
+    const extracted = extractTextFromBplist(text);
+    if (extracted) {
+      console.warn("[parse] extracted text from bplist blob:", extracted.slice(0, 80));
+      return extracted;
+    }
     console.warn("[parse] text field is NSKeyedArchiver/bplist blob — replacing with [date]");
     return "[date]";
   }
@@ -86,10 +121,16 @@ function scrubText(text: string): string {
 function decodeAttributedBody(blob: Buffer): string | null {
   if (!blob || blob.length === 0) return null;
   try {
-    // Early exit: if the blob is an NSKeyedArchiver binary plist (starts with
-    // "bplist00"), it contains a serialized NSDate or similar object — there is
-    // no readable message text to extract.
+    // If the blob is an NSKeyedArchiver binary plist (starts with "bplist00"),
+    // try to extract readable text from the binary structure before giving up.
+    // iOS encodes messages with data-detected content (e.g. "@ 12:30") as
+    // attributed strings serialized via NSKeyedArchiver — the text IS in there.
     if (blob.length >= 8 && blob.subarray(0, 8).equals(BPLIST_MAGIC)) {
+      const bplistText = extractTextFromBplist(blob.toString("utf-8"));
+      if (bplistText) {
+        console.warn("[parse] extracted text from bplist attributedBody:", bplistText.slice(0, 80));
+        return bplistText;
+      }
       console.warn("[parse] attributedBody is a bplist blob (NSDate?) — skipping");
       return null;
     }
@@ -284,11 +325,18 @@ export function getEggMessages(
       }
 
       // Final safety net: if text still contains NSKeyedArchiver/bplist binary markers
-      // after all processing, replace entirely.  This catches any path that bypassed
-      // stripBplistBlob (e.g. content sourced from attributedBody or indirect decoding).
+      // after all processing, try to extract readable text one more time before
+      // falling back to "[date]".  This catches any path that bypassed stripBplistBlob
+      // (e.g. content sourced from attributedBody or indirect decoding).
       if (text && (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text))) {
-        console.warn("[parse] final safety: text still contains NS/bplist artifacts — replacing with [date]");
-        text = "[date]";
+        const extracted = extractTextFromBplist(text);
+        if (extracted) {
+          console.warn("[parse] final safety: extracted text from residual bplist artifacts:", extracted.slice(0, 80));
+          text = extracted;
+        } else {
+          console.warn("[parse] final safety: text still contains NS/bplist artifacts — replacing with [date]");
+          text = "[date]";
+        }
       }
 
       // Reply-to context: if this message is a reply, prepend the original text
