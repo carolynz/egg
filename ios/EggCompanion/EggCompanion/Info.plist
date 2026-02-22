@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- HealthKit usage description — shown when requesting health data access -->
+	<key>NSHealthShareUsageDescription</key>
+	<string>Egg reads your health data (steps, heart rate, sleep, workouts, nutrition) to help you track wellness patterns and provide personalized insights.</string>
+
+	<!-- HealthKit clinical records (future-proofing) -->
+	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+	<string>Egg can read clinical health records to provide more complete health insights.</string>
+
+	<!-- Background fetch — used for periodic health data sync -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+
+	<!-- Bundle display name -->
+	<key>CFBundleDisplayName</key>
+	<string>Egg</string>
+</dict>
+</plist>

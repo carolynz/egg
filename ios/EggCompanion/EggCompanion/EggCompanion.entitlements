@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- HealthKit entitlement — required to access any HealthKit data -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+
+	<!-- HealthKit capabilities (background delivery allows updates while app is backgrounded) -->
+	<key>com.apple.developer.healthkit.access</key>
+	<array>
+		<string>health-records</string>
+	</array>
+
+	<!-- FamilyControls entitlement — required for Screen Time / DeviceActivity APIs -->
+	<key>com.apple.developer.family-controls</key>
+	<array>
+		<string>individual</string>
+	</array>
+</dict>
+</plist>
