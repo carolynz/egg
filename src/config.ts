@@ -36,6 +36,9 @@ export const NUDGES_SENT_DIR = join(EGG_MEMORY_DIR, "nudges", "sent");
 export const QUIET_START = 23;
 export const QUIET_END = 8;
 
+// Heartbeat poller interval (default 30 minutes)
+export const HEARTBEAT_INTERVAL_MS = parseInt(env("HEARTBEAT_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
+
 // ── Lazy: only needed by serve/send commands ──
 // These throw if accessed without being set, but don't crash at import time.
 let _eggAppleId: string | undefined;

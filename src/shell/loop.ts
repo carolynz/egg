@@ -7,6 +7,7 @@ import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
 import { OuraPoller } from "../integrations/oura.js";
+import { HeartbeatPoller } from "../integrations/heartbeat.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -176,6 +177,7 @@ export class ShellLoop {
   private sender: Sender;
   private taskRunner: TaskRunner;
   private ouraPoller: OuraPoller;
+  private heartbeatPoller: HeartbeatPoller;
   private state: ShellState;
   private seenSet: Set<number>;
   private userPhoneNorm: string;
@@ -193,6 +195,7 @@ export class ShellLoop {
       this.persist();
     });
     this.ouraPoller = new OuraPoller();
+    this.heartbeatPoller = new HeartbeatPoller();
   }
 
   async init(): Promise<void> {
@@ -641,6 +644,7 @@ export class ShellLoop {
       console.log("Shutting down — saving state");
       this.running = false;
       this.ouraPoller.stop();
+      this.heartbeatPoller.stop();
       this.persist();
       process.exit(0);
     };
@@ -651,6 +655,7 @@ export class ShellLoop {
     await this.handleStartupRecovery();
     this.startNudgeWatcher();
     this.ouraPoller.start();
+    this.heartbeatPoller.start();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {
