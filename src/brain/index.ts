@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL, EGG_SESSION_MAX_AGE_MS } from "../config.js";
+import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL, EGG_SESSION_MAX_AGE_MS, getGitHubRepoUrl } from "../config.js";
 import { logBrainStart, logBrainEnd, logBrainSession } from "../logger.js";
 
 // ── Session tracking ──
@@ -97,6 +97,14 @@ function buildPrompt(
     "where unit is s/m/h and the follow-up message is contextually relevant (e.g. 'rest over — next set!'). " +
     "The marker is stripped before sending — only your other reply lines reach the user."
   );
+
+  const repoUrl = getGitHubRepoUrl();
+  if (repoUrl) {
+    lines.push(
+      `When answering questions about Egg's functionality or capabilities, reference the relevant source file ` +
+      `and link to it on GitHub so the user can verify. Use the format: ${repoUrl}/blob/main/<filepath>`
+    );
+  }
 
   // Strip null bytes and other control chars that break child_process.spawn args
   return lines.join("\n").replace(/\x00/g, "").replace(/[\x01-\x08\x0e-\x1f]/g, "");

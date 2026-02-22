@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { EGG_BRAIN, EGG_MODEL, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir } from "../config.js";
+import { EGG_BRAIN, EGG_MODEL, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir, getGitHubRepoUrl } from "../config.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState } from "./state.js";
 import { logTaskStart, logTaskEnd } from "../logger.js";
@@ -128,7 +128,22 @@ export class TaskRunner {
 
       if (code === 0) {
         console.log(`[task] ${id} completed in ${duration}s`);
-        const msg = `✅ task ${id} done (${duration}s)\n${summary}\nrestarting...`;
+        let msg = `✅ task ${id} done (${duration}s)\n${summary}`;
+
+        // Append commit link if we can detect the repo and latest commit
+        try {
+          const hash = execSync("git rev-parse HEAD", {
+            cwd: getEggCodeDir(),
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 5000,
+          }).toString().trim();
+          const repoUrl = getGitHubRepoUrl();
+          if (repoUrl && hash) {
+            msg += `\n🔗 ${repoUrl}/commit/${hash}`;
+          }
+        } catch {}
+
+        msg += "\nrestarting...";
         await this.sender.send(msg);
         this.recordHistory(msg);
         // Give message time to send, then restart

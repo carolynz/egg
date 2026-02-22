@@ -71,6 +71,44 @@ export function getEggCodeDir(): string {
   return _eggCodeDir;
 }
 
+// ── GitHub repo URL ──
+import { execSync } from "child_process";
+
+let _gitHubRepoUrl: string | null | undefined;
+
+export function getGitHubRepoUrl(): string | null {
+  if (_gitHubRepoUrl !== undefined) return _gitHubRepoUrl;
+  try {
+    const raw = execSync("git remote get-url origin", {
+      cwd: getEggCodeDir(),
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).toString().trim();
+
+    // SSH: git@github.com:owner/repo.git → https://github.com/owner/repo
+    const sshMatch = raw.match(/^git@github\.com:(.+?)(?:\.git)?$/);
+    if (sshMatch) {
+      _gitHubRepoUrl = `https://github.com/${sshMatch[1]}`;
+      return _gitHubRepoUrl;
+    }
+
+    // HTTPS: https://github.com/owner/repo.git → https://github.com/owner/repo
+    const httpsMatch = raw.match(/^https:\/\/github\.com\/(.+?)(?:\.git)?$/);
+    if (httpsMatch) {
+      _gitHubRepoUrl = `https://github.com/${httpsMatch[1]}`;
+      return _gitHubRepoUrl;
+    }
+
+    // Unknown format — return null
+    console.warn(`[config] unrecognized git remote format: ${raw}`);
+    _gitHubRepoUrl = null;
+    return null;
+  } catch {
+    _gitHubRepoUrl = null;
+    return null;
+  }
+}
+
 // ── Startup check ──
 import { existsSync } from "fs";
 
