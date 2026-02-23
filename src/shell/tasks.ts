@@ -91,7 +91,7 @@ export class TaskRunner {
     const child = spawn(EGG_BRAIN, args, {
       cwd: codeDir,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, ANTHROPIC_API_KEY: undefined },
     });
 
     const task: RunningTask = { id, prompt, startedAt: new Date(), process: child };

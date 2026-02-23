@@ -19,6 +19,7 @@ export async function senseDaily(): Promise<void> {
   const child = spawn(EGG_BRAIN, ["-p", prompt, "--output-format", "text", "--model", EGG_MODEL], {
     cwd: EGG_MEMORY_DIR,
     stdio: ["ignore", "inherit", "inherit"],
+    env: { ...process.env, ANTHROPIC_API_KEY: undefined },
   });
 
   return new Promise((resolve, reject) => {
