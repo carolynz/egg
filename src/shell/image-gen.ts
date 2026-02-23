@@ -5,31 +5,87 @@ import { writeFileSync } from "fs";
 /**
  * Generate an image from a text prompt.
  * Requires IMAGE_GEN_API_KEY in env.
- * IMAGE_GEN_PROVIDER defaults to "openai" (DALL-E 3).
+ * IMAGE_GEN_PROVIDER defaults to "gemini" (Nano Banana Pro).
  *
  * Returns the local file path of the downloaded image, or null on failure.
  */
 export async function generateImage(prompt: string): Promise<string | null> {
-  const apiKey = process.env.IMAGE_GEN_API_KEY;
-  const provider = process.env.IMAGE_GEN_PROVIDER ?? "openai";
+  const provider = process.env.IMAGE_GEN_PROVIDER ?? "gemini";
+  const apiKey = provider === "gemini"
+    ? process.env.GEMINI_API_KEY
+    : process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    console.warn("[image-gen] IMAGE_GEN_API_KEY not set — image generation disabled");
+    const keyName = provider === "gemini" ? "GEMINI_API_KEY" : "OPENAI_API_KEY";
+    console.warn(`[image-gen] ${keyName} not set — image generation disabled`);
     return null;
   }
 
   console.log(`[image-gen] generating via ${provider}: "${prompt.slice(0, 80)}"`);
 
   try {
+    if (provider === "gemini") {
+      return await generateGemini(prompt, apiKey);
+    }
     if (provider === "openai") {
       return await generateOpenAI(prompt, apiKey);
     }
-    console.warn(`[image-gen] unknown IMAGE_GEN_PROVIDER: "${provider}" — only "openai" is supported`);
+    console.warn(`[image-gen] unknown IMAGE_GEN_PROVIDER: "${provider}" — supported: "gemini", "openai"`);
     return null;
   } catch (err) {
     console.error("[image-gen] generation failed:", err);
     return null;
   }
+}
+
+interface GeminiResponse {
+  candidates?: {
+    content?: {
+      parts?: { inlineData?: { mimeType?: string; data?: string }; text?: string }[];
+    };
+  }[];
+}
+
+async function generateGemini(prompt: string, apiKey: string): Promise<string | null> {
+  const model = "gemini-3-pro-image-preview";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+      },
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`Gemini image API ${resp.status}: ${body.slice(0, 300)}`);
+  }
+
+  const data = (await resp.json()) as GeminiResponse;
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!parts) throw new Error("No parts in Gemini response");
+
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      const buffer = Buffer.from(part.inlineData.data, "base64");
+      const ext = part.inlineData.mimeType?.includes("png") ? "png" : "jpg";
+      const outPath = join(tmpdir(), `egg-img-${Date.now()}.${ext}`);
+      writeFileSync(outPath, buffer);
+      console.log(`[image-gen] saved ${buffer.length} bytes → ${outPath}`);
+      return outPath;
+    }
+  }
+
+  throw new Error("No image data in Gemini response");
 }
 
 async function generateOpenAI(prompt: string, apiKey: string): Promise<string | null> {
