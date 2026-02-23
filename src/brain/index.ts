@@ -193,7 +193,7 @@ function spawnBrainProcess(args: string[], prompt: string): Promise<string> {
     const child = spawn(EGG_BRAIN, args, {
       cwd: EGG_MEMORY_DIR,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, ANTHROPIC_API_KEY: undefined },
     });
 
     const chunks: Buffer[] = [];
