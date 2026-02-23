@@ -78,7 +78,8 @@ function extractTextFromBplist(raw: string): string | null {
  *     or the Z$classname structural key — these never appear in normal user text.
  *
  * When any indicator is detected, first attempt to extract the readable text from
- * the blob. Only fall back to "[date]" if no readable text can be recovered.
+ * the blob. Return empty string if no readable text can be recovered, so
+ * attributedBody can take over.
  */
 function stripBplistBlob(text: string): string {
   if (
@@ -91,8 +92,8 @@ function stripBplistBlob(text: string): string {
       console.warn("[parse] extracted text from bplist blob:", extracted.slice(0, 80));
       return extracted;
     }
-    console.warn("[parse] text field is NSKeyedArchiver/bplist blob — replacing with [date]");
-    return "[date]";
+    console.warn("[parse] text field is NSKeyedArchiver/bplist blob — clearing so attributedBody takes over");
+    return "";
   }
   return text;
 }
@@ -326,7 +327,7 @@ export function getEggMessages(
 
       // Final safety net: if text still contains NSKeyedArchiver/bplist binary markers
       // after all processing, try to extract readable text one more time before
-      // falling back to "[date]".  This catches any path that bypassed stripBplistBlob
+      // clearing.  This catches any path that bypassed stripBplistBlob
       // (e.g. content sourced from attributedBody or indirect decoding).
       if (text && (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text))) {
         const extracted = extractTextFromBplist(text);
@@ -334,8 +335,8 @@ export function getEggMessages(
           console.warn("[parse] final safety: extracted text from residual bplist artifacts:", extracted.slice(0, 80));
           text = extracted;
         } else {
-          console.warn("[parse] final safety: text still contains NS/bplist artifacts — replacing with [date]");
-          text = "[date]";
+          console.warn("[parse] final safety: text still contains NS/bplist artifacts — clearing");
+          text = "";
         }
       }
 
