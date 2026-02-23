@@ -115,6 +115,16 @@ export interface Message {
   attachments?: Attachment[];
 }
 
+export interface ThreadMessage {
+  text: string;
+  isFromMe: boolean;
+  time: string;
+  rowid: number;
+  sender: string;
+  chatIdentifier: string;
+  displayName: string;
+}
+
 function scrubText(text: string): string {
   return text.replace(PHONE_RE, "[PHONE]").replace(EMAIL_RE, "[EMAIL]");
 }
@@ -401,6 +411,131 @@ export function getEggMessages(
     return { messages, maxRowid };
   } catch (err) {
     console.error("Failed to read Egg conversation from chat.db:", err);
+    return { messages: [], maxRowid: sinceRowid };
+  }
+}
+
+/**
+ * Clean raw message text: extract from bplist, strip binary artifacts,
+ * remove invisible chars, scrub PII. Returns cleaned text or empty string.
+ */
+function cleanMessageText(
+  rawText: string | null,
+  rawAttrBody: Buffer | null,
+): string {
+  let text = rawText ? stripBplistBlob(rawText) : rawText;
+  const attrText = rawAttrBody ? decodeAttributedBody(rawAttrBody) : null;
+
+  if (
+    attrText &&
+    !attrText.includes("__kIM") &&
+    !hasNSClassArtifacts(attrText) &&
+    (!text || attrText.length > text.length)
+  ) {
+    text = attrText;
+  }
+
+  if (!text) return "";
+  if (/^\s*\ufffc\s*$/.test(text)) return "";
+  if (text.includes("__kIM")) return "";
+
+  text = text.replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+  text = text.replace(/\ufffc/g, "");
+  text = text.replace(NS_CLASS_RE, "");
+  text = text.replace(
+    /[\u200B-\u200D\uFEFF\u00AD\u2060\u200C\u200F\u202A-\u202E\u2066-\u206F]/g,
+    "",
+  );
+  text = text.trim();
+
+  if (!text) return "";
+  text = scrubText(text);
+  if (!/[\x20-\x7e\u00a0-\ufffa]/.test(text)) return "";
+
+  // Final bplist safety net
+  if (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text)) {
+    const extracted = extractTextFromBplist(text);
+    return extracted ?? "";
+  }
+
+  return text;
+}
+
+/**
+ * Read ALL messages from chat.db (all threads, all accounts) since a given ROWID.
+ * Used by iMessage ingestion to track the user's full social landscape.
+ */
+export function getAllMessages(sinceRowid: number): { messages: ThreadMessage[]; maxRowid: number } {
+  if (!existsSync(CHAT_DB)) return { messages: [], maxRowid: sinceRowid };
+
+  try {
+    const db = new Database(CHAT_DB, { fileMustExist: true });
+    db.pragma("query_only = ON");
+
+    const rows = db
+      .prepare(
+        `SELECT
+          m.ROWID,
+          m.text,
+          m.attributedBody,
+          m.is_from_me,
+          m.date / 1000000000 + 978307200 as unix_timestamp,
+          h.id as sender_handle,
+          m.associated_message_type,
+          c.chat_identifier,
+          c.display_name
+        FROM message m
+        LEFT JOIN handle h ON m.handle_id = h.ROWID
+        LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+        LEFT JOIN chat c ON cmj.chat_id = c.ROWID
+        WHERE m.ROWID > ?
+        ORDER BY m.date ASC
+        LIMIT 500`,
+      )
+      .all(sinceRowid) as Array<{
+      ROWID: number;
+      text: string | null;
+      attributedBody: Buffer | null;
+      is_from_me: number;
+      unix_timestamp: number;
+      sender_handle: string | null;
+      associated_message_type: number | null;
+      chat_identifier: string | null;
+      display_name: string | null;
+    }>;
+
+    const messages: ThreadMessage[] = [];
+    let maxRowid = sinceRowid;
+
+    for (const row of rows) {
+      maxRowid = Math.max(maxRowid, row.ROWID);
+
+      // Skip reactions
+      if ((row.associated_message_type ?? 0) !== 0) continue;
+
+      const text = cleanMessageText(row.text, row.attributedBody);
+      if (!text) continue;
+
+      const ts = row.unix_timestamp;
+      const time = ts
+        ? new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ")
+        : "unknown";
+
+      messages.push({
+        text,
+        isFromMe: Boolean(row.is_from_me),
+        time,
+        rowid: row.ROWID,
+        sender: row.sender_handle ?? "",
+        chatIdentifier: row.chat_identifier ?? "",
+        displayName: row.display_name ?? "",
+      });
+    }
+
+    db.close();
+    return { messages, maxRowid };
+  } catch (err) {
+    console.error("Failed to read messages from chat.db:", err);
     return { messages: [], maxRowid: sinceRowid };
   }
 }

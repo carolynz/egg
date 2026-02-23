@@ -42,6 +42,9 @@ export const EGG_SESSION_MAX_AGE_MS = parseInt(env("EGG_SESSION_MAX_AGE_MS") || 
 // Heartbeat poller interval (default 30 minutes)
 export const HEARTBEAT_INTERVAL_MS = parseInt(env("HEARTBEAT_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 
+// iMessage ingestion poller interval (default 30 minutes)
+export const IMESSAGE_INGEST_INTERVAL_MS = parseInt(env("IMESSAGE_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
+
 // ── Lazy: only needed by serve/send commands ──
 // These throw if accessed without being set, but don't crash at import time.
 let _eggAppleId: string | undefined;

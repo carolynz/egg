@@ -1,10 +1,11 @@
 import { spawn } from "child_process";
 import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL } from "../config.js";
+import { runIngestCycle } from "./imessage-ingest.js";
 
 export async function senseImessage(): Promise<void> {
-  // TODO: Phase 3 — read broader iMessage history, group by contact,
-  // call brain to summarize and update dossiers
-  console.log("iMessage sense not yet implemented");
+  console.log("Running iMessage ingestion...");
+  await runIngestCycle();
+  console.log("iMessage ingestion complete");
 }
 
 export async function senseDaily(): Promise<void> {
