@@ -635,8 +635,12 @@ export class ShellLoop {
     const summary = getDailySummary(today);
     const msgs = formatSummaryMessages(summary);
     console.log(`[token-tracker] sending daily summary: ${msgs[0]}`);
-    for (const msg of msgs) {
-      await this.sender.send(msg);
+    try {
+      for (const msg of msgs) {
+        await this.sender.send(msg);
+      }
+    } catch (err) {
+      console.error("[token-tracker] failed to send daily summary:", err);
     }
     logApiSpend(formatSummaryLogLine(summary));
   }

@@ -38,6 +38,14 @@ function tailLogFiles(): void {
   }
 }
 
+process.on("unhandledRejection", (reason, _promise) => {
+  console.error("[egg] Unhandled Promise rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[egg] Uncaught exception:", error);
+});
+
 const program = new Command();
 
 program.name("egg").description("Egg — your bold personal AI agent").version("0.1.0");
