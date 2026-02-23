@@ -2,7 +2,7 @@ import { getEggMessages, Message, Attachment } from "./imessage-reader.js";
 import { BlueBubblesClient } from "./bluebubbles.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState, ShellState } from "./state.js";
-import { callBrain } from "../brain/index.js";
+import { callBrain, initBrainSession } from "../brain/index.js";
 import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
@@ -199,6 +199,7 @@ export class ShellLoop {
   }
 
   async init(): Promise<void> {
+    initBrainSession();
     await this.bb.init();
   }
 

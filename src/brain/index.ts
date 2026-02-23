@@ -1,6 +1,10 @@
 import { spawn } from "child_process";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { join } from "path";
 import { EGG_BRAIN, EGG_MEMORY_DIR, EGG_MODEL, EGG_SESSION_MAX_AGE_MS, getGitHubRepoUrl } from "../config.js";
 import { logBrainStart, logBrainEnd, logBrainSession } from "../logger.js";
+
+const SESSION_FILE = join(EGG_MEMORY_DIR, ".egg-session.json");
 
 // ── Session tracking ──
 // Stored in-process so the long-running shell loop reuses sessions automatically.
@@ -14,6 +18,7 @@ export function clearBrainSession(): void {
   }
   currentSessionId = null;
   sessionCreatedAt = 0;
+  try { unlinkSync(SESSION_FILE); } catch {}
 }
 
 export function getBrainSessionId(): string | null {
@@ -29,6 +34,38 @@ function isSessionValid(): boolean {
     return false;
   }
   return true;
+}
+
+function saveSessionToDisk(): void {
+  if (!currentSessionId) return;
+  try {
+    writeFileSync(SESSION_FILE, JSON.stringify({ sessionId: currentSessionId, createdAt: sessionCreatedAt }));
+  } catch (err) {
+    console.warn("[brain] failed to persist session:", err);
+  }
+}
+
+function loadSessionFromDisk(): void {
+  try {
+    if (!existsSync(SESSION_FILE)) return;
+    const data = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
+    if (!data.sessionId || !data.createdAt) return;
+    if (Date.now() - data.createdAt > EGG_SESSION_MAX_AGE_MS) {
+      console.log("[brain] persisted session expired, discarding");
+      try { unlinkSync(SESSION_FILE); } catch {}
+      return;
+    }
+    currentSessionId = data.sessionId;
+    sessionCreatedAt = data.createdAt;
+    logBrainSession("restored", currentSessionId!);
+  } catch {
+    console.warn("[brain] failed to load persisted session, starting fresh");
+  }
+}
+
+/** Call during serve startup to restore a persisted session. */
+export function initBrainSession(): void {
+  loadSessionFromDisk();
 }
 
 function getContextBlock(): string {
@@ -221,6 +258,7 @@ export async function callBrain(opts: {
         logBrainSession("reused", newSessionId);
       }
       currentSessionId = newSessionId;
+      saveSessionToDisk();
     }
 
     return reply;
@@ -245,6 +283,7 @@ export async function callBrain(opts: {
           currentSessionId = newSessionId;
           sessionCreatedAt = Date.now();
           logBrainSession("new-after-retry", newSessionId);
+          saveSessionToDisk();
         }
 
         return reply;
