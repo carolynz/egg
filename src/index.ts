@@ -5,6 +5,9 @@ import { ShellLoop } from "./shell/loop.js";
 import { callBrain } from "./brain/index.js";
 import { senseDaily, senseImessage } from "./senses/index.js";
 import { ouraAuth } from "./integrations/oura.js";
+import { googleAuth } from "./integrations/google.js";
+import { intakeCalendar } from "./integrations/gcal.js";
+import { intakeGmail } from "./integrations/gmail.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -157,6 +160,30 @@ program
   .description("Authorize Egg to access your Oura ring via OAuth2")
   .action(async () => {
     await ouraAuth();
+  });
+
+// ── google:auth ──
+program
+  .command("google:auth")
+  .description("Authorize a Google account (Gmail + Calendar) via OAuth2")
+  .action(async () => {
+    await googleAuth();
+  });
+
+// ── intake gcal ──
+intake
+  .command("gcal")
+  .description("Pull 6 months of Google Calendar events into egg-memory")
+  .action(async () => {
+    await intakeCalendar();
+  });
+
+// ── intake gmail ──
+intake
+  .command("gmail")
+  .description("Pull 6 months of Gmail metadata into egg-memory")
+  .action(async () => {
+    await intakeGmail();
   });
 
 // ── status ──
