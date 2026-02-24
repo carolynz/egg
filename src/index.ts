@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { ShellLoop } from "./shell/loop.js";
 import { callBrain } from "./brain/index.js";
 import { senseDaily, senseImessage } from "./senses/index.js";
+import { runOnboard } from "./commands/onboard.js";
 import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
 import { intakeCalendar } from "./integrations/gcal.js";
@@ -184,6 +185,30 @@ intake
   .description("Pull 6 months of Gmail metadata into egg-memory")
   .action(async () => {
     await intakeGmail();
+  });
+
+// ── onboard ──
+program
+  .command("onboard")
+  .description("Onboard Egg by distilling historical data into memory files")
+  .option("--source <source>", "Data source: imessage, gmail, gcal, all", "all")
+  .option("--period <period>", "Time period: 6m, 1y, 2y, all", "6m")
+  .action(async (opts: { source: string; period: string }) => {
+    checkMemoryDir();
+    const validSources = ["imessage", "gmail", "gcal", "all"];
+    const validPeriods = ["6m", "1y", "2y", "all"];
+    if (!validSources.includes(opts.source)) {
+      console.error(`Invalid source: ${opts.source}. Must be one of: ${validSources.join(", ")}`);
+      process.exit(1);
+    }
+    if (!validPeriods.includes(opts.period)) {
+      console.error(`Invalid period: ${opts.period}. Must be one of: ${validPeriods.join(", ")}`);
+      process.exit(1);
+    }
+    await runOnboard(
+      opts.source as "imessage" | "gmail" | "gcal" | "all",
+      opts.period as "6m" | "1y" | "2y" | "all",
+    );
   });
 
 // ── status ──
