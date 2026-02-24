@@ -10,6 +10,7 @@ import { google } from "googleapis";
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/userinfo.email",
 ];
 
 const CALLBACK_PORT = 4322;
