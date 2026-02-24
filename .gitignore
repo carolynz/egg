@@ -3,3 +3,6 @@ dist/
 .env
 *.tsbuildinfo
 .egg-session.json
+credentials.json
+token.json
+*-tokens.json
