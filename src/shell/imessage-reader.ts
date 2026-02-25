@@ -151,6 +151,13 @@ function decodeAttributedBody(blob: Buffer): string | null {
     const END_MARKERS = [Buffer.from([0x86, 0x84]), Buffer.from([0x00, 0x00, 0x00])];
     const STREAM_MARKERS = [Buffer.from([0x2b, 0x00]), Buffer.from([0x2a, 0x00])];
 
+    // Try each stream marker + end marker combination and pick the longest
+    // valid text.  iOS data detectors (e.g. for measurements like "185 lbs")
+    // insert attribute markers in the typedstream that can false-positive match
+    // our end markers, causing premature truncation.  By trying all combos we
+    // avoid losing trailing text like unit suffixes.
+    let bestMarkerText = "";
+
     for (const marker of STREAM_MARKERS) {
       const idx = blob.indexOf(marker);
       if (idx === -1) continue;
@@ -158,19 +165,19 @@ function decodeAttributedBody(blob: Buffer): string | null {
       const start = idx + marker.length;
       const candidate = blob.subarray(start);
 
-      let textBytes = candidate;
       for (const em of END_MARKERS) {
         const endIdx = candidate.indexOf(em);
         if (endIdx > 0) {
-          textBytes = candidate.subarray(0, endIdx);
-          break;
+          const textBytes = candidate.subarray(0, endIdx);
+          const text = textBytes.toString("utf-8").replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
+          if (text && text.length > bestMarkerText.length && !text.includes("__kIM") && !hasNSClassArtifacts(text)) {
+            bestMarkerText = text;
+          }
         }
       }
-
-      const text = textBytes.toString("utf-8").replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
-      // Reject results that are iMessage internal metadata or NSKeyedArchiver binary artifacts
-      if (text && !text.includes("__kIM") && !hasNSClassArtifacts(text)) return text;
     }
+
+    if (bestMarkerText) return bestMarkerText;
 
     // Fallback: decode entire blob as UTF-8, find longest printable segment.
     // Filter out iMessage internal metadata strings.
@@ -280,6 +287,13 @@ export function getEggMessages(
       const attrText = row.attributedBody
         ? decodeAttributedBody(row.attributedBody)
         : null;
+
+      // Debug: log raw sources so we can diagnose text-eating issues (e.g. "lbs")
+      const rawTextSnip = row.text ? row.text.slice(0, 200) : "(null)";
+      const bpTextSnip = text ? text.slice(0, 200) : "(null)";
+      const attrSnip = attrText ? attrText.slice(0, 200) : "(null)";
+      console.log(`[msg-debug] ROWID=${row.ROWID} raw.text=${JSON.stringify(rawTextSnip)} bpStripped=${JSON.stringify(bpTextSnip)} attrText=${JSON.stringify(attrSnip)}`);
+
       // Prefer whichever source gives the longer text — row.text can be
       // truncated or null on newer macOS, and attributedBody has the full content.
       // But reject attrText that looks like iMessage internal metadata.
@@ -289,6 +303,7 @@ export function getEggMessages(
         !hasNSClassArtifacts(attrText) &&
         (!text || attrText.length > text.length)
       ) {
+        console.log(`[msg-debug] ROWID=${row.ROWID} chose attrText over text (${attrText.length} > ${text?.length ?? 0})`);
         text = attrText;
       }
 
@@ -349,6 +364,9 @@ export function getEggMessages(
           text = "";
         }
       }
+
+      // Debug: log final processed text
+      console.log(`[msg-debug] ROWID=${row.ROWID} final=${JSON.stringify(text ? text.slice(0, 200) : "(empty)")}`);
 
       // Reply-to context: if this message is a reply, prepend the original text
       if (row.thread_originator_guid && text) {
