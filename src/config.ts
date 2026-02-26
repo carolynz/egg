@@ -16,8 +16,8 @@ function required(key: string): string {
   return val;
 }
 
-// cwd is the egg-memory directory
-export const EGG_MEMORY_DIR = process.cwd();
+// egg-memory directory: env override or cwd
+export const EGG_MEMORY_DIR = env("EGG_MEMORY_DIR") || join(homedir(), "egg-memory");
 export const EGG_PID_FILE = join(homedir(), ".egg", "egg.pid");
 export const EGG_BRAIN = env("EGG_BRAIN") || "claude";
 export const EGG_MODEL = env("EGG_MODEL") || "claude-opus-4-6";
