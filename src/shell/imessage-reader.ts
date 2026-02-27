@@ -146,16 +146,68 @@ function decodeAttributedBody(blob: Buffer): string | null {
       return null;
     }
 
-    // Ported from Python egg-me-on: find text between known markers in the
-    // NSKeyedArchiver typedstream blob, with a regex fallback.
+    // Primary: length-prefixed extraction from NSArchiver typedstream.
+    // The NSAttributedString's text is stored as a length-prefixed C string
+    // after a 0x2b or 0x2a marker byte.  The byte(s) following the marker
+    // encode the text length using Apple's compact-int format:
+    //   < 0x80        → single-byte length
+    //   0x81 NN       → 1-byte extended length
+    //   0x82 HH LL    → 2-byte big-endian length
+    // Reading exactly `length` bytes extracts the clean text regardless of
+    // any data-detector attribute metadata that follows in the blob.
+    const CONTENT_MARKERS = [0x2b, 0x2a];
+    let bestLengthText = "";
+
+    for (const markerByte of CONTENT_MARKERS) {
+      let searchFrom = 0;
+      while (searchFrom < blob.length - 2) {
+        const idx = blob.indexOf(markerByte, searchFrom);
+        if (idx === -1 || idx + 2 >= blob.length) break;
+        searchFrom = idx + 1;
+
+        // Parse compact int length after marker
+        const firstByte = blob[idx + 1];
+        let textStart: number;
+        let byteLen: number;
+
+        if (firstByte < 0x80) {
+          byteLen = firstByte;
+          textStart = idx + 2;
+        } else if (firstByte === 0x81 && idx + 3 <= blob.length) {
+          byteLen = blob[idx + 2];
+          textStart = idx + 3;
+        } else if (firstByte === 0x82 && idx + 4 <= blob.length) {
+          byteLen = (blob[idx + 2] << 8) | blob[idx + 3];
+          textStart = idx + 4;
+        } else {
+          continue;
+        }
+
+        if (byteLen < 1 || textStart + byteLen > blob.length) continue;
+
+        // Safety: cap at 0x86 0x84 end-of-object marker to prevent over-read
+        // if we matched the wrong 0x2b byte.
+        const END_MARKER = Buffer.from([0x86, 0x84]);
+        const endIdx = blob.indexOf(END_MARKER, textStart);
+        const end = endIdx > textStart
+          ? Math.min(textStart + byteLen, endIdx)
+          : textStart + byteLen;
+
+        const text = blob.subarray(textStart, end).toString("utf-8")
+          .replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
+
+        if (text && text.length > bestLengthText.length
+            && !text.includes("__kIM") && !hasNSClassArtifacts(text)) {
+          bestLengthText = text;
+        }
+      }
+    }
+
+    if (bestLengthText) return bestLengthText;
+
+    // Fallback: end-marker approach for blobs where length parsing fails.
     const END_MARKERS = [Buffer.from([0x86, 0x84]), Buffer.from([0x00, 0x00, 0x00])];
     const STREAM_MARKERS = [Buffer.from([0x2b, 0x00]), Buffer.from([0x2a, 0x00])];
-
-    // Try each stream marker + end marker combination and pick the longest
-    // valid text.  iOS data detectors (e.g. for measurements like "185 lbs")
-    // insert attribute markers in the typedstream that can false-positive match
-    // our end markers, causing premature truncation.  By trying all combos we
-    // avoid losing trailing text like unit suffixes.
     let bestMarkerText = "";
 
     for (const marker of STREAM_MARKERS) {
