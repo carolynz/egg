@@ -45,6 +45,9 @@ export const HEARTBEAT_INTERVAL_MS = parseInt(env("HEARTBEAT_INTERVAL_MS") || ""
 // iMessage ingestion poller interval (default 30 minutes)
 export const IMESSAGE_INGEST_INTERVAL_MS = parseInt(env("IMESSAGE_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 
+// Google (Gmail + Calendar) ingestion poller interval (default 30 minutes)
+export const GOOGLE_INGEST_INTERVAL_MS = parseInt(env("GOOGLE_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
+
 // ── Lazy: only needed by serve/send commands ──
 // These throw if accessed without being set, but don't crash at import time.
 let _eggAppleId: string | undefined;

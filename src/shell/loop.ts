@@ -9,6 +9,7 @@ import { generateImage } from "./image-gen.js";
 import { OuraPoller } from "../integrations/oura.js";
 import { HeartbeatPoller } from "../integrations/heartbeat.js";
 import { ImessageIngestPoller } from "../senses/imessage-ingest.js";
+import { GoogleIngestPoller } from "../integrations/google-ingest.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -180,6 +181,7 @@ export class ShellLoop {
   private ouraPoller: OuraPoller;
   private heartbeatPoller: HeartbeatPoller;
   private imessageIngestPoller: ImessageIngestPoller;
+  private googleIngestPoller: GoogleIngestPoller;
   private state: ShellState;
   private seenSet: Set<number>;
   private userPhoneNorm: string;
@@ -199,6 +201,7 @@ export class ShellLoop {
     this.ouraPoller = new OuraPoller();
     this.heartbeatPoller = new HeartbeatPoller();
     this.imessageIngestPoller = new ImessageIngestPoller();
+    this.googleIngestPoller = new GoogleIngestPoller();
   }
 
   async init(): Promise<void> {
@@ -654,6 +657,7 @@ export class ShellLoop {
       this.ouraPoller.stop();
       this.heartbeatPoller.stop();
       this.imessageIngestPoller.stop();
+      this.googleIngestPoller.stop();
       this.persist();
       process.exit(0);
     };
@@ -666,6 +670,7 @@ export class ShellLoop {
     this.ouraPoller.start();
     this.heartbeatPoller.start();
     this.imessageIngestPoller.start();
+    this.googleIngestPoller.start();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {

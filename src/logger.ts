@@ -7,6 +7,7 @@ export const EGG_LOG_DIR = join(homedir(), ".egg", "logs");
 export const BRAIN_LOG = join(EGG_LOG_DIR, "brain.log");
 export const TASKS_LOG = join(EGG_LOG_DIR, "tasks.log");
 export const IMESSAGE_INGEST_LOG = join(EGG_LOG_DIR, "imessage-ingest.log");
+export const GOOGLE_INGEST_LOG = join(EGG_LOG_DIR, "google-ingest.log");
 
 function ensureLogDir(): void {
   mkdirSync(EGG_LOG_DIR, { recursive: true });
