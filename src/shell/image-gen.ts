@@ -5,7 +5,7 @@ import { writeFileSync } from "fs";
 /**
  * Generate an image from a text prompt.
  * Requires IMAGE_GEN_API_KEY in env.
- * IMAGE_GEN_PROVIDER defaults to "gemini" (Nano Banana Pro).
+ * IMAGE_GEN_PROVIDER defaults to "gemini" (Nano Banana 2).
  *
  * Returns the local file path of the downloaded image, or null on failure.
  */
@@ -47,7 +47,7 @@ interface GeminiResponse {
 }
 
 async function generateGemini(prompt: string, apiKey: string): Promise<string | null> {
-  const model = "gemini-3-pro-image-preview";
+  const model = "gemini-3.1-flash-image";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   const resp = await fetch(url, {
