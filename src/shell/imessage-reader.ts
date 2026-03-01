@@ -28,6 +28,12 @@ const NSKEYEDARCHIVER_KEY_RE = /\$classname|\$classes|\$archiver|\$objects|\$ver
 // These never appear in legitimate user messages.
 const BPLIST_BINARY_RE = /Z\$classname|XNSObject|XNSDate|XNSValue|WNSValue|WNSDate/;
 
+// Apple Data Detector metadata strings embedded in attributedBody blobs when iMessage
+// applies smart formatting (weights, dates, addresses, flight numbers, etc.).
+// These are DDScannerResult/PhysicalAmount/etc. class names from the embedded bplist
+// inside __kIMDataDetectedAttributeName attributes.  They never appear in user text.
+const DATA_DETECTOR_RE = /DDScanner|PhysicalAmount|FractionalValue|IntegralValue|dd-result|NS\.rangeval|NS\.special/;
+
 function hasNSClassArtifacts(text: string): boolean {
   // No \b — bplist type bytes are letters and directly precede NS class names
   return /NS[A-Z]\w*|streamtyped|typedstream|bplist\S*/.test(text);
@@ -51,6 +57,7 @@ function extractTextFromBplist(raw: string): string | null {
       !NSKEYEDARCHIVER_KEY_RE.test(s) &&
       !BPLIST_BINARY_RE.test(s) &&
       !hasNSClassArtifacts(s) &&
+      !DATA_DETECTOR_RE.test(s) &&
       !s.includes("__kIM") &&
       !/^bplist\d+/.test(s) &&
       !/^\$\w+$/.test(s),
@@ -159,6 +166,8 @@ function decodeAttributedBody(blob: Buffer): string | null {
     let bestLengthText = "";
 
     for (const markerByte of CONTENT_MARKERS) {
+      // If 0x2B already found valid text, skip 0x2A — no need to scan further
+      if (bestLengthText && markerByte === 0x2a) break;
       let searchFrom = 0;
       while (searchFrom < blob.length - 2) {
         const idx = blob.indexOf(markerByte, searchFrom);
@@ -197,8 +206,14 @@ function decodeAttributedBody(blob: Buffer): string | null {
           .replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
 
         if (text && text.length > bestLengthText.length
-            && !text.includes("__kIM") && !hasNSClassArtifacts(text)) {
+            && !text.includes("__kIM") && !hasNSClassArtifacts(text)
+            && !DATA_DETECTOR_RE.test(text)) {
           bestLengthText = text;
+          // For 0x2B: take the first valid match and stop — the real text
+          // is always the first string object in the typedstream.  Scanning
+          // further risks hitting 0x2B bytes inside embedded bplists
+          // (data detector metadata).
+          if (markerByte === 0x2b) break;
         }
       }
     }
@@ -222,7 +237,7 @@ function decodeAttributedBody(blob: Buffer): string | null {
         if (endIdx > 0) {
           const textBytes = candidate.subarray(0, endIdx);
           const text = textBytes.toString("utf-8").replace(/[\x00-\x08\x0e-\x1f]/g, "").trim();
-          if (text && text.length > bestMarkerText.length && !text.includes("__kIM") && !hasNSClassArtifacts(text)) {
+          if (text && text.length > bestMarkerText.length && !text.includes("__kIM") && !hasNSClassArtifacts(text) && !DATA_DETECTOR_RE.test(text)) {
             bestMarkerText = text;
           }
         }
@@ -340,12 +355,6 @@ export function getEggMessages(
         ? decodeAttributedBody(row.attributedBody)
         : null;
 
-      // Debug: log raw sources so we can diagnose text-eating issues (e.g. "lbs")
-      const rawTextSnip = row.text ? row.text.slice(0, 200) : "(null)";
-      const bpTextSnip = text ? text.slice(0, 200) : "(null)";
-      const attrSnip = attrText ? attrText.slice(0, 200) : "(null)";
-      console.log(`[msg-debug] ROWID=${row.ROWID} raw.text=${JSON.stringify(rawTextSnip)} bpStripped=${JSON.stringify(bpTextSnip)} attrText=${JSON.stringify(attrSnip)}`);
-
       // Prefer whichever source gives the longer text — row.text can be
       // truncated or null on newer macOS, and attributedBody has the full content.
       // But reject attrText that looks like iMessage internal metadata.
@@ -353,9 +362,9 @@ export function getEggMessages(
         attrText &&
         !attrText.includes("__kIM") &&
         !hasNSClassArtifacts(attrText) &&
+        !DATA_DETECTOR_RE.test(attrText) &&
         (!text || attrText.length > text.length)
       ) {
-        console.log(`[msg-debug] ROWID=${row.ROWID} chose attrText over text (${attrText.length} > ${text?.length ?? 0})`);
         text = attrText;
       }
 
@@ -406,7 +415,7 @@ export function getEggMessages(
       // after all processing, try to extract readable text one more time before
       // clearing.  This catches any path that bypassed stripBplistBlob
       // (e.g. content sourced from attributedBody or indirect decoding).
-      if (text && (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text))) {
+      if (text && (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text) || DATA_DETECTOR_RE.test(text))) {
         const extracted = extractTextFromBplist(text);
         if (extracted) {
           console.warn("[parse] final safety: extracted text from residual bplist artifacts:", extracted.slice(0, 80));
@@ -416,9 +425,6 @@ export function getEggMessages(
           text = "";
         }
       }
-
-      // Debug: log final processed text
-      console.log(`[msg-debug] ROWID=${row.ROWID} final=${JSON.stringify(text ? text.slice(0, 200) : "(empty)")}`);
 
       // Reply-to context: if this message is a reply, prepend the original text
       if (row.thread_originator_guid && text) {
@@ -500,6 +506,7 @@ function cleanMessageText(
     attrText &&
     !attrText.includes("__kIM") &&
     !hasNSClassArtifacts(attrText) &&
+    !DATA_DETECTOR_RE.test(attrText) &&
     (!text || attrText.length > text.length)
   ) {
     text = attrText;
@@ -523,7 +530,7 @@ function cleanMessageText(
   if (!/[\x20-\x7e\u00a0-\ufffa]/.test(text)) return "";
 
   // Final bplist safety net
-  if (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text)) {
+  if (NSKEYEDARCHIVER_KEY_RE.test(text) || BPLIST_BINARY_RE.test(text) || hasNSClassArtifacts(text) || DATA_DETECTOR_RE.test(text)) {
     const extracted = extractTextFromBplist(text);
     return extracted ?? "";
   }
