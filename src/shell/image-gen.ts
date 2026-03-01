@@ -47,7 +47,7 @@ interface GeminiResponse {
 }
 
 async function generateGemini(prompt: string, apiKey: string): Promise<string | null> {
-  const model = "gemini-2.5-flash-image";
+  const model = "gemini-3.1-flash-image-preview";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   const resp = await fetch(url, {
