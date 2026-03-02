@@ -11,6 +11,7 @@ import { HeartbeatPoller } from "../integrations/heartbeat.js";
 import { ImessageIngestPoller } from "../senses/imessage-ingest.js";
 import { GoogleIngestPoller } from "../integrations/google-ingest.js";
 import { PhotosIngestPoller } from "../senses/photos-ingest.js";
+import { EmailCheckPoller } from "../integrations/email-check.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -184,6 +185,7 @@ export class ShellLoop {
   private imessageIngestPoller: ImessageIngestPoller;
   private googleIngestPoller: GoogleIngestPoller;
   private photosIngestPoller: PhotosIngestPoller;
+  private emailCheckPoller: EmailCheckPoller;
   private state: ShellState;
   private seenSet: Set<number>;
   private userPhoneNorm: string;
@@ -205,6 +207,7 @@ export class ShellLoop {
     this.imessageIngestPoller = new ImessageIngestPoller();
     this.googleIngestPoller = new GoogleIngestPoller();
     this.photosIngestPoller = new PhotosIngestPoller();
+    this.emailCheckPoller = new EmailCheckPoller();
   }
 
   async init(): Promise<void> {
@@ -662,6 +665,7 @@ export class ShellLoop {
       this.imessageIngestPoller.stop();
       this.googleIngestPoller.stop();
       this.photosIngestPoller.stop();
+      this.emailCheckPoller.stop();
       this.persist();
       process.exit(0);
     };
@@ -676,6 +680,7 @@ export class ShellLoop {
     this.imessageIngestPoller.start();
     this.googleIngestPoller.start();
     this.photosIngestPoller.start();
+    this.emailCheckPoller.start();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {

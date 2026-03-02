@@ -51,6 +51,9 @@ export const GOOGLE_INGEST_INTERVAL_MS = parseInt(env("GOOGLE_INGEST_INTERVAL_MS
 // Photos library ingestion poller interval (default 30 minutes)
 export const PHOTOS_INGEST_INTERVAL_MS = parseInt(env("PHOTOS_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 
+// Fast email check poller interval (default 1 minute)
+export const EMAIL_CHECK_INTERVAL_MS = parseInt(env("EMAIL_CHECK_INTERVAL_MS") || "", 10) || 60 * 1000;
+
 // ── Lazy: only needed by serve/send commands ──
 // These throw if accessed without being set, but don't crash at import time.
 let _eggAppleId: string | undefined;
