@@ -3,6 +3,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
+import Anthropic from "@anthropic-ai/sdk";
 import {
   getGoogleOAuthConfig,
   loadAllAccounts,
@@ -11,6 +12,7 @@ import {
 } from "./google.js";
 import { EGG_MEMORY_DIR, EMAIL_CHECK_INTERVAL_MS, NUDGES_DIR } from "../config.js";
 import { EMAIL_CHECK_LOG } from "../logger.js";
+import { recordTokenUsage } from "../token-tracker.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +29,7 @@ interface NewEmail {
   isImportant: boolean;
   hasUnsubscribe: boolean;
   categoryLabels: string[];   // CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, etc.
+  body?: string;              // full text body (fetched on demand for notable emails)
 }
 
 interface SentThread {
@@ -212,32 +215,170 @@ async function fetchNewMessages(
   return emails;
 }
 
-// ── Nudge writing ────────────────────────────────────────────────────────────
+// ── Anthropic client (for email summarization) ──────────────────────────────
 
-function writeEmailNudge(emails: NewEmail[]): void {
-  if (emails.length === 0) return;
+let anthropicClient: Anthropic | null = null;
+let anthropicKeyMissing = false;
 
-  mkdirSync(NUDGES_DIR, { recursive: true });
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const lines: string[] = [];
+function getAnthropicClient(): Anthropic | null {
+  if (anthropicKeyMissing) return null;
+  if (!anthropicClient) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      logCheck("ANTHROPIC_API_KEY not set — email summary disabled");
+      anthropicKeyMissing = true;
+      return null;
+    }
+    anthropicClient = new Anthropic();
+  }
+  return anthropicClient;
+}
 
-  lines.push(`New email${emails.length > 1 ? "s" : ""} worth noting:`);
+// ── Email body fetching ──────────────────────────────────────────────────────
 
-  for (const email of emails) {
-    // Extract just the name/email from the From header
-    const sender = email.from.replace(/<[^>]+>/, "").trim() || email.from;
-    const star = email.isStarred ? " *" : "";
-    lines.push(`- ${sender}: ${email.subject}${star}`);
-    if (email.snippet) {
-      // Truncate snippet to ~80 chars
-      const snip = email.snippet.length > 80
-        ? email.snippet.slice(0, 77) + "..."
-        : email.snippet;
-      lines.push(`  "${snip}"`);
+function decodeBase64Url(data: string): string {
+  const base64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64").toString("utf-8");
+}
+
+function extractTextBody(payload: any): string {
+  if (!payload) return "";
+
+  // Single-part text/plain message
+  if (payload.body?.data && payload.mimeType === "text/plain") {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  // Multipart — find text/plain recursively
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        return decodeBase64Url(part.body.data);
+      }
+      if (part.parts) {
+        const nested = extractTextBody(part);
+        if (nested) return nested;
+      }
     }
   }
 
-  writeFileSync(join(NUDGES_DIR, `${ts}.md`), lines.join("\n"));
+  return "";
+}
+
+async function fetchEmailBody(auth: OAuth2Client, messageId: string): Promise<string> {
+  const gmail = google.gmail({ version: "v1", auth });
+  try {
+    const res = await gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    });
+    return extractTextBody(res.data.payload) || "";
+  } catch (err) {
+    logCheck(`WARNING: failed to fetch body for ${messageId}: ${err}`);
+    return "";
+  }
+}
+
+// ── AI summarization ─────────────────────────────────────────────────────────
+
+async function summarizeEmails(emails: NewEmail[]): Promise<string | null> {
+  const client = getAnthropicClient();
+  if (!client) return null;
+
+  const emailDescriptions = emails.map((e, i) => {
+    const sender = e.from.replace(/<[^>]+>/, "").trim() || e.from;
+    const body = e.body ? `\nBody:\n${e.body.slice(0, 2000)}` : "";
+    return `Email ${i + 1}:\nFrom: ${sender}\nSubject: ${e.subject}\nSnippet: ${e.snippet}${body}`;
+  }).join("\n\n---\n\n");
+
+  try {
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      messages: [{
+        role: "user",
+        content: `You are summarizing emails for a text message notification. For each email, write a concise summary starting with 📩.
+
+Rules:
+- Write in lowercase, casual tone
+- For actionable emails, include: what it's about, who needs what, any deadlines, and how to respond
+- For non-actionable emails (newsletters, FYIs, receipts), keep to one line ending with "— no action needed, just FYI"
+- Separate multiple emails with a blank line
+- Do NOT add any preamble or explanation, just the summaries
+
+Format for actionable emails:
+📩 [brief summary of what it's about]:
+
+deadline: [date if mentioned]
+
+[who] needs:
+- [action item 1]
+- [action item 2]
+
+respond to: [email or instructions if applicable]
+
+Format for non-actionable emails:
+📩 [brief summary] — no action needed, just FYI
+
+Here are the emails to summarize:
+
+${emailDescriptions}`,
+      }],
+    });
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+
+    recordTokenUsage("claude-haiku-4-5-20251001", response.usage.input_tokens, response.usage.output_tokens);
+
+    return text.trim();
+  } catch (err) {
+    logCheck(`WARNING: email summarization failed: ${err}`);
+    return null;
+  }
+}
+
+// ── Nudge writing ────────────────────────────────────────────────────────────
+
+async function writeEmailNudge(
+  emails: NewEmail[],
+  authMap: Map<string, OAuth2Client>,
+): Promise<void> {
+  if (emails.length === 0) return;
+
+  // Fetch full bodies for notable emails (at most MAX_NUDGES_PER_CHECK = 3)
+  for (const email of emails) {
+    const auth = authMap.get(email.id);
+    if (auth) {
+      email.body = await fetchEmailBody(auth, email.id);
+    }
+  }
+
+  // Try AI summarization, fall back to raw format
+  let content = await summarizeEmails(emails);
+
+  if (!content) {
+    // Fallback: raw format with 📩 prefix
+    const lines: string[] = [];
+    for (const email of emails) {
+      const sender = email.from.replace(/<[^>]+>/, "").trim() || email.from;
+      const star = email.isStarred ? " *" : "";
+      lines.push(`📩 ${sender}: ${email.subject}${star}`);
+      if (email.snippet) {
+        const snip = email.snippet.length > 80
+          ? email.snippet.slice(0, 77) + "..."
+          : email.snippet;
+        lines.push(`  "${snip}"`);
+      }
+    }
+    content = lines.join("\n");
+  }
+
+  mkdirSync(NUDGES_DIR, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  writeFileSync(join(NUDGES_DIR, `${ts}.md`), content);
   logCheck(`Wrote nudge for ${emails.length} email(s)`);
 }
 
@@ -404,6 +545,7 @@ async function checkNewEmails(): Promise<void> {
   const sentThreadIds = new Set(cursor.sentThreads.map((t) => t.threadId));
 
   let allNew: NewEmail[] = [];
+  const messageAuthMap = new Map<string, OAuth2Client>();
 
   for (const account of accounts) {
     try {
@@ -414,6 +556,11 @@ async function checkNewEmails(): Promise<void> {
       const unseen = emails.filter((e) => !seenSet.has(e.id));
       if (unseen.length > 0) {
         logCheck(`${unseen.length} new email(s) for ${account.email}`);
+      }
+
+      // Track auth clients for body fetching later
+      for (const e of unseen) {
+        messageAuthMap.set(e.id, client);
       }
 
       // Track sent emails for open thread detection
@@ -460,7 +607,7 @@ async function checkNewEmails(): Promise<void> {
   if (notable.length > 0) {
     // Cap notifications to avoid spam
     const toNotify = notable.slice(0, MAX_NUDGES_PER_CHECK);
-    writeEmailNudge(toNotify);
+    await writeEmailNudge(toNotify, messageAuthMap);
     logCheck(`${notable.length} notable email(s), nudged ${toNotify.length}`);
   }
 
