@@ -25,6 +25,8 @@ interface NewEmail {
   labels: string[];
   isStarred: boolean;
   isImportant: boolean;
+  hasUnsubscribe: boolean;
+  categoryLabels: string[];   // CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, etc.
 }
 
 interface SentThread {
@@ -45,7 +47,7 @@ interface EmailCheckCursor {
 
 const CURSOR_FILE = join(EGG_MEMORY_DIR, "data", "email-check-cursor.json");
 const MAX_SEEN_IDS = 500;
-const MAX_NUDGES_PER_CHECK = 5;
+const MAX_NUDGES_PER_CHECK = 3;
 const OPEN_THREAD_WINDOW_MS = 48 * 60 * 60 * 1000;   // 48 hours
 const OPEN_THREAD_MIN_AGE_MS = 24 * 60 * 60 * 1000;   // 24 hours
 const MAX_SENT_THREADS = 200;
@@ -166,7 +168,7 @@ async function fetchNewMessages(
           userId: "me",
           id,
           format: "metadata",
-          metadataHeaders: ["From", "To", "Subject", "Date"],
+          metadataHeaders: ["From", "To", "Subject", "Date", "List-Unsubscribe"],
         }).catch((err) => {
           logCheck(`WARNING: failed to fetch message ${id}: ${err}`);
           return null;
@@ -188,6 +190,8 @@ async function fetchNewMessages(
         isoDate = dateStr;
       }
 
+      const categoryLabels = labels.filter((l) => l.startsWith("CATEGORY_"));
+
       emails.push({
         id: msg.id ?? "",
         threadId: msg.threadId ?? "",
@@ -199,6 +203,8 @@ async function fetchNewMessages(
         labels,
         isStarred: labels.includes("STARRED"),
         isImportant: labels.includes("IMPORTANT"),
+        hasUnsubscribe: !!getHeader(headers, "List-Unsubscribe"),
+        categoryLabels,
       });
     }
   }
@@ -253,6 +259,105 @@ function writeOpenThreadsNudge(threads: SentThread[]): void {
   logCheck(`Wrote open-threads nudge for ${threads.length} thread(s)`);
 }
 
+// ── Marketing / newsletter detection ─────────────────────────────────────────
+
+/** Sender prefixes that indicate automated/marketing mail */
+const NOREPLY_PREFIXES = [
+  "noreply@", "no-reply@", "no_reply@",
+  "newsletter@", "newsletters@",
+  "marketing@", "promo@", "promotions@",
+  "deals@", "offers@", "sales@",
+  "news@", "hello@", "info@",
+  "updates@", "notifications@", "notify@",
+  "mailer@", "bulk@", "bounce@",
+  "support@", "team@",
+];
+
+/** Domains overwhelmingly used for promotional/marketing sends */
+const PROMO_SENDER_DOMAINS = new Set([
+  // Email service providers / marketing platforms
+  "sendgrid.net", "mailchimp.com", "mailgun.org", "constantcontact.com",
+  "hubspot.com", "hubspotmail.net", "klaviyo.com", "braze.com",
+  "sailthru.com", "iterable.com", "customer.io", "intercom-mail.com",
+  "mandrillapp.com", "postmarkapp.com", "amazonses.com",
+  "sparkpostmail.com", "cmail19.com", "cmail20.com",
+  // Retail / fashion
+  "gap.com", "oldnavy.com", "bananarepublic.com", "athleta.com",
+  "aritzia.com", "aliceandolivia.com", "nordstrom.com", "jcrew.com",
+  "macys.com", "bloomingdales.com", "saks.com", "net-a-porter.com",
+  "zara.com", "hm.com", "uniqlo.com", "nike.com", "adidas.com",
+  "target.com", "walmart.com", "amazon.com", "costco.com",
+  "urbanoutfitters.com", "anthropologie.com", "freepeople.com",
+  "everlane.com", "madewell.com", "lululemon.com", "rei.com",
+  // Tech / SaaS marketing
+  "replit.com", "github.com", "notion.so", "figma.com",
+  "canva.com", "shopify.com", "squarespace.com",
+  "medium.com", "substack.com", "beehiiv.com",
+  // Electronics / maker
+  "adafruit.com", "sparkfun.com", "digikey.com", "mouser.com",
+  // Food / delivery
+  "doordash.com", "uber.com", "ubereats.com", "grubhub.com",
+  "instacart.com", "caviar.com",
+  // Travel
+  "airbnb.com", "booking.com", "expedia.com", "hotels.com",
+  "kayak.com", "southwest.com", "delta.com", "united.com",
+  // Misc
+  "groupon.com", "yelp.com", "nextdoor.com",
+]);
+
+/** Gmail category labels that indicate non-personal mail */
+const PROMO_CATEGORY_LABELS = new Set([
+  "CATEGORY_PROMOTIONS",
+  "CATEGORY_SOCIAL",
+]);
+
+function extractEmailAddress(from: string): string {
+  const match = from.match(/<([^>]+)>/);
+  return (match ? match[1] : from).toLowerCase().trim();
+}
+
+function extractDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at >= 0 ? email.slice(at + 1) : email;
+}
+
+function isMarketingEmail(email: NewEmail): boolean {
+  const addr = extractEmailAddress(email.from);
+  const domain = extractDomain(addr);
+
+  // Check sender prefix blocklist
+  for (const prefix of NOREPLY_PREFIXES) {
+    if (addr.startsWith(prefix)) return true;
+  }
+
+  // Check known promotional sender domains
+  if (PROMO_SENDER_DOMAINS.has(domain)) return true;
+
+  // Check Gmail category labels (PROMOTIONS / SOCIAL)
+  for (const label of email.categoryLabels) {
+    if (PROMO_CATEGORY_LABELS.has(label)) return true;
+  }
+
+  // Check for unsubscribe signals
+  if (email.hasUnsubscribe) return true;
+  const snippetLower = email.snippet.toLowerCase();
+  if (snippetLower.includes("unsubscribe") || snippetLower.includes("opt out") || snippetLower.includes("email preferences")) {
+    return true;
+  }
+
+  return false;
+}
+
+function isRealPerson(email: NewEmail): boolean {
+  const addr = extractEmailAddress(email.from);
+  for (const prefix of NOREPLY_PREFIXES) {
+    if (addr.startsWith(prefix)) return false;
+  }
+  const domain = extractDomain(addr);
+  if (PROMO_SENDER_DOMAINS.has(domain)) return false;
+  return true;
+}
+
 // ── Email importance scoring ─────────────────────────────────────────────────
 
 function isNotableEmail(
@@ -260,9 +365,21 @@ function isNotableEmail(
   knownNames: Set<string>,
   sentThreadIds: Set<string>,
 ): boolean {
-  if (email.isImportant || email.isStarred) return true;
+  // Starred emails always pass — explicit user signal
+  if (email.isStarred) return true;
+
+  // Reject marketing/promotional emails early (even if Gmail says "important")
+  if (isMarketingEmail(email)) return false;
+
+  // Known contact (has a dossier in people/)
   if (isFromKnownContact(email.from, knownNames)) return true;
+
+  // Reply to a thread the user sent
   if (sentThreadIds.has(email.threadId)) return true;
+
+  // Real person + Gmail important (important is only useful combined with other signals)
+  if (isRealPerson(email) && email.isImportant) return true;
+
   return false;
 }
 
