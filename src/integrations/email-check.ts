@@ -442,6 +442,8 @@ const PROMO_SENDER_DOMAINS = new Set([
   // Travel
   "airbnb.com", "booking.com", "expedia.com", "hotels.com",
   "kayak.com", "southwest.com", "delta.com", "united.com",
+  // News / media
+  "politico.com",
   // Misc
   "groupon.com", "yelp.com", "nextdoor.com",
 ]);
@@ -497,6 +499,71 @@ function isRealPerson(email: NewEmail): boolean {
   const domain = extractDomain(addr);
   if (PROMO_SENDER_DOMAINS.has(domain)) return false;
   return true;
+}
+
+// ── AI newsletter classification ─────────────────────────────────────────────
+
+/** Session-level cache: sender domain → true (personal) / false (newsletter) */
+const aiClassificationCache = new Map<string, boolean>();
+
+/**
+ * Uses Claude Haiku to classify whether an email is a newsletter/bulk send
+ * or a genuine personal/business email. Only called for emails that passed
+ * the cheap heuristic filter (isMarketingEmail).
+ *
+ * Returns true if PERSONAL, false if NEWSLETTER.
+ * Falls back to true (let it through) on failure — better to over-notify.
+ */
+async function classifyEmailWithAI(email: NewEmail): Promise<boolean> {
+  const addr = extractEmailAddress(email.from);
+  const domain = extractDomain(addr);
+
+  // Check cache first — avoid re-classifying the same sender domain
+  if (aiClassificationCache.has(domain)) {
+    return aiClassificationCache.get(domain)!;
+  }
+
+  const client = getAnthropicClient();
+  if (!client) return true; // No API key → let it through
+
+  const prompt = `Classify this email. Is it a newsletter, marketing email, automated notification, or bulk send? Or is it a personal/business email that someone specifically wrote to the recipient?
+
+From: ${email.from}
+Subject: ${email.subject}
+Snippet: ${email.snippet}
+Has unsubscribe header: ${email.hasUnsubscribe}
+
+Reply with just one word: NEWSLETTER or PERSONAL.`;
+
+  try {
+    const response = await Promise.race([
+      client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 16,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 5000),
+      ),
+    ]);
+
+    recordTokenUsage("claude-haiku-4-5-20251001", response.usage.input_tokens, response.usage.output_tokens);
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim()
+      .toUpperCase();
+
+    const isPersonal = !text.includes("NEWSLETTER");
+    aiClassificationCache.set(domain, isPersonal);
+    return isPersonal;
+  } catch (err) {
+    logCheck(`WARNING: AI classification failed for ${domain}: ${err}`);
+    // Fall back to letting it through
+    return true;
+  }
 }
 
 // ── Email importance scoring ─────────────────────────────────────────────────
@@ -602,7 +669,26 @@ async function checkNewEmails(): Promise<void> {
     return !accountEmails.has(fromAddr);
   });
 
-  const notable = inbound.filter((e) => isNotableEmail(e, knownNames, sentThreadIds));
+  // AI classification: filter newsletters that slipped past heuristics
+  const genuineInbound: NewEmail[] = [];
+  for (const email of inbound) {
+    // Skip AI check for starred emails (explicit user signal)
+    if (email.isStarred) {
+      genuineInbound.push(email);
+      continue;
+    }
+    // Skip AI check for emails already caught by heuristic filter
+    if (isMarketingEmail(email)) continue;
+
+    const isGenuine = await classifyEmailWithAI(email);
+    if (isGenuine) {
+      genuineInbound.push(email);
+    } else {
+      logCheck(`AI classified as newsletter: ${email.from} — ${email.subject}`);
+    }
+  }
+
+  const notable = genuineInbound.filter((e) => isNotableEmail(e, knownNames, sentThreadIds));
 
   if (notable.length > 0) {
     // Cap notifications to avoid spam
