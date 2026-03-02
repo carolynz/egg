@@ -598,8 +598,8 @@ async function checkNewEmails(): Promise<void> {
   // Filter for notable emails (skip user's own sent emails)
   const accountEmails = new Set(accounts.map((a) => a.email.toLowerCase()));
   const inbound = allNew.filter((e) => {
-    const fromEmail = e.from.toLowerCase();
-    return !accountEmails.has(fromEmail) && !fromEmail.includes(accounts[0]?.email.toLowerCase() ?? "");
+    const fromAddr = extractEmailAddress(e.from);
+    return !accountEmails.has(fromAddr);
   });
 
   const notable = inbound.filter((e) => isNotableEmail(e, knownNames, sentThreadIds));

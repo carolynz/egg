@@ -450,7 +450,8 @@ export class ShellLoop {
       // Claim the file before sending — prevents re-delivery if serve restarts mid-send
       renameSync(filePath, sentPath);
       console.log(`Delivering nudge: ${file}`);
-      await this.sendReply(text);
+      // Send nudge as a single message (bypass sendReply's line-splitting)
+      await this.sender.send(text);
     }
   }
 
