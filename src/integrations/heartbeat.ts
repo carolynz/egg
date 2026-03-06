@@ -83,6 +83,39 @@ function gatherContext(): string {
     sections.push(`## Recent daily digests\n${dailyContent}`);
   }
 
+  // Active projects
+  const projectsDir = join(EGG_MEMORY_DIR, "projects");
+  try {
+    if (existsSync(projectsDir)) {
+      const projectFiles = readdirSync(projectsDir)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => ({ name: f, path: join(projectsDir, f), mtime: statSync(join(projectsDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (projectFiles.length > 0) {
+        const MAX_TOTAL = 6000;
+        let totalChars = 0;
+        const projectSections: string[] = [];
+
+        for (const pf of projectFiles) {
+          if (totalChars >= MAX_TOTAL) break;
+          const remaining = MAX_TOTAL - totalChars;
+          const maxForThis = Math.min(1500, remaining);
+          const content = readFileSafe(pf.path, maxForThis);
+          if (content) {
+            const label = pf.name.replace(/\.md$/, "");
+            projectSections.push(`### ${label}\n${content}`);
+            totalChars += content.length;
+          }
+        }
+
+        if (projectSections.length > 0) {
+          sections.push(`## Active projects\n${projectSections.join("\n\n")}`);
+        }
+      }
+    }
+  } catch {}
+
   // Recently sent nudges (last 48 hours)
   const recentSent = getRecentFiles(NUDGES_SENT_DIR, ".md", 10, 48 * 60 * 60 * 1000);
   if (recentSent.length > 0) {
