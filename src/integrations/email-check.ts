@@ -491,6 +491,56 @@ function isMarketingEmail(email: NewEmail): boolean {
   return false;
 }
 
+// ── Transactional / receipt detection ─────────────────────────────────────────
+
+/** Domains that send payment receipts, shipping updates, and order confirmations */
+const TRANSACTIONAL_SENDER_DOMAINS = new Set([
+  // Payment / receipts
+  "venmo.com", "paypal.com", "zelle.com", "cash.app",
+  "square.com", "stripe.com",
+  // Bank alerts
+  "chase.com", "capitalone.com", "bankofamerica.com",
+  "wellsfargo.com", "citi.com", "discover.com",
+  // Shipping / tracking
+  "ups.com", "fedex.com", "usps.com", "dhl.com",
+  "shippo.com", "aftership.com",
+  // Order confirmations
+  "ebay.com", "etsy.com",
+]);
+
+/** Subject-line patterns indicating transactional/receipt emails */
+const TRANSACTIONAL_SUBJECT_PATTERNS = [
+  /payment\s+received/i,
+  /you\s+(paid|sent|received)/i,
+  /\breceipt\b/i,
+  /shipping\s+confirm/i,
+  /tracking\s+(number|update|info)/i,
+  /order\s+(confirm|received|shipped|delivered)/i,
+  /delivery\s+(notif|confirm|update)/i,
+  /your\s+(package|shipment|order|delivery)/i,
+  /out\s+for\s+delivery/i,
+  /has\s+been\s+(delivered|shipped)/i,
+  /transfer\s+(complete|confirmed|received)/i,
+  /direct\s+deposit/i,
+  /payment\s+(confirm|complete|processed)/i,
+];
+
+function isTransactionalEmail(email: NewEmail): boolean {
+  const addr = extractEmailAddress(email.from);
+  const domain = extractDomain(addr);
+
+  // Check known transactional sender domains
+  if (TRANSACTIONAL_SENDER_DOMAINS.has(domain)) return true;
+
+  // Check subject line patterns
+  const subject = email.subject;
+  for (const pattern of TRANSACTIONAL_SUBJECT_PATTERNS) {
+    if (pattern.test(subject)) return true;
+  }
+
+  return false;
+}
+
 function isRealPerson(email: NewEmail): boolean {
   const addr = extractEmailAddress(email.from);
   for (const prefix of NOREPLY_PREFIXES) {
@@ -578,6 +628,9 @@ function isNotableEmail(
 
   // Reject marketing/promotional emails early (even if Gmail says "important")
   if (isMarketingEmail(email)) return false;
+
+  // Reject transactional/receipt emails (payments, shipping, order confirmations)
+  if (isTransactionalEmail(email)) return false;
 
   // Known contact (has a dossier in people/)
   if (isFromKnownContact(email.from, knownNames)) return true;
