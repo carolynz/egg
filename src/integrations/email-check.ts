@@ -28,6 +28,7 @@ interface NewEmail {
   isStarred: boolean;
   isImportant: boolean;
   hasUnsubscribe: boolean;
+  autoSubmitted: string;      // Auto-Submitted header value (e.g. "auto-replied")
   categoryLabels: string[];   // CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, etc.
   body?: string;              // full text body (fetched on demand for notable emails)
 }
@@ -171,7 +172,7 @@ async function fetchNewMessages(
           userId: "me",
           id,
           format: "metadata",
-          metadataHeaders: ["From", "To", "Subject", "Date", "List-Unsubscribe"],
+          metadataHeaders: ["From", "To", "Subject", "Date", "List-Unsubscribe", "Auto-Submitted"],
         }).catch((err) => {
           logCheck(`WARNING: failed to fetch message ${id}: ${err}`);
           return null;
@@ -207,6 +208,7 @@ async function fetchNewMessages(
         isStarred: labels.includes("STARRED"),
         isImportant: labels.includes("IMPORTANT"),
         hasUnsubscribe: !!getHeader(headers, "List-Unsubscribe"),
+        autoSubmitted: getHeader(headers, "Auto-Submitted"),
         categoryLabels,
       });
     }
@@ -541,6 +543,47 @@ function isTransactionalEmail(email: NewEmail): boolean {
   return false;
 }
 
+// ── Out-of-office / auto-reply detection ──────────────────────────────────
+
+/** Subject-line patterns indicating out-of-office or auto-reply emails */
+const OOO_SUBJECT_PATTERNS = [
+  /out\s+of\s+(the\s+)?office/i,
+  /\bOOO\b/,
+  /\bauto[\s-]?reply\b/i,
+  /\bauto[\s-]?response\b/i,
+  /\bautomatic\s+reply\b/i,
+  /\baway\s+from\s+(the\s+)?office\b/i,
+  /\bon\s+(annual\s+)?leave\b/i,
+  /\bon\s+vacation\b/i,
+  /\bon\s+holiday\b/i,
+  /\bcurrently\s+unavailable\b/i,
+  /\blimited\s+access\s+to\s+email\b/i,
+  /\bI\s+am\s+currently\s+out\b/i,
+];
+
+function isOutOfOfficeEmail(email: NewEmail): boolean {
+  // Check Auto-Submitted header (RFC 3834)
+  if (email.autoSubmitted && email.autoSubmitted.toLowerCase() !== "no") {
+    return true;
+  }
+
+  // Check subject line patterns
+  for (const pattern of OOO_SUBJECT_PATTERNS) {
+    if (pattern.test(email.subject)) return true;
+  }
+
+  // Check snippet for common OOO phrases
+  const snippetLower = email.snippet.toLowerCase();
+  if (
+    (snippetLower.includes("out of office") || snippetLower.includes("auto-reply") || snippetLower.includes("automatic reply")) &&
+    snippetLower.includes("return")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isRealPerson(email: NewEmail): boolean {
   const addr = extractEmailAddress(email.from);
   for (const prefix of NOREPLY_PREFIXES) {
@@ -616,6 +659,64 @@ Reply with just one word: NEWSLETTER or PERSONAL.`;
   }
 }
 
+// ── AI actionability classification ───────────────────────────────────────────
+
+/**
+ * Uses Claude Haiku to determine whether an email requires the user to take
+ * action (reply, fill out a form, meet a deadline, etc.) vs. purely
+ * informational / FYI content.
+ *
+ * Returns true if ACTIONABLE, false if FYI-only.
+ * Falls back to true (let it through) on failure.
+ */
+async function classifyActionability(email: NewEmail): Promise<boolean> {
+  const client = getAnthropicClient();
+  if (!client) return true; // No API key → let it through
+
+  const body = email.body ? `\nBody:\n${email.body.slice(0, 2000)}` : "";
+
+  const prompt = `Does this email require the recipient to take a specific action (reply, fill out a form, meet a deadline, make a decision, attend something, etc.)?
+
+Or is it purely informational with NO action needed — like an FYI, status update, announcement, confirmation of something already done, or "just letting you know" type email?
+
+From: ${email.from}
+Subject: ${email.subject}
+Snippet: ${email.snippet}${body}
+
+Reply with just one word: ACTIONABLE or FYI.`;
+
+  try {
+    const response = await Promise.race([
+      client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 16,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 5000),
+      ),
+    ]);
+
+    recordTokenUsage("claude-haiku-4-5-20251001", response.usage.input_tokens, response.usage.output_tokens);
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim()
+      .toUpperCase();
+
+    const actionable = !text.includes("FYI");
+    if (!actionable) {
+      logCheck(`AI classified as FYI (no action needed): ${email.from} — ${email.subject}`);
+    }
+    return actionable;
+  } catch (err) {
+    logCheck(`WARNING: AI actionability check failed: ${err}`);
+    return true; // Fall back to letting it through
+  }
+}
+
 // ── Email importance scoring ─────────────────────────────────────────────────
 
 function isNotableEmail(
@@ -631,6 +732,9 @@ function isNotableEmail(
 
   // Reject transactional/receipt emails (payments, shipping, order confirmations)
   if (isTransactionalEmail(email)) return false;
+
+  // Reject out-of-office / auto-reply emails
+  if (isOutOfOfficeEmail(email)) return false;
 
   // Known contact (has a dossier in people/)
   if (isFromKnownContact(email.from, knownNames)) return true;
@@ -746,8 +850,37 @@ async function checkNewEmails(): Promise<void> {
   if (notable.length > 0) {
     // Cap notifications to avoid spam
     const toNotify = notable.slice(0, MAX_NUDGES_PER_CHECK);
-    await writeEmailNudge(toNotify, messageAuthMap);
-    logCheck(`${notable.length} notable email(s), nudged ${toNotify.length}`);
+
+    // Fetch bodies before actionability check (needed for AI classification)
+    for (const email of toNotify) {
+      if (!email.body) {
+        const auth = messageAuthMap.get(email.id);
+        if (auth) {
+          email.body = await fetchEmailBody(auth, email.id);
+        }
+      }
+    }
+
+    // Filter out FYI-only emails (no action needed)
+    const actionable: NewEmail[] = [];
+    for (const email of toNotify) {
+      // Starred emails bypass actionability check — explicit user signal
+      if (email.isStarred) {
+        actionable.push(email);
+        continue;
+      }
+      const needsAction = await classifyActionability(email);
+      if (needsAction) {
+        actionable.push(email);
+      }
+    }
+
+    if (actionable.length > 0) {
+      await writeEmailNudge(actionable, messageAuthMap);
+      logCheck(`${notable.length} notable email(s), ${actionable.length} actionable, nudged ${actionable.length}`);
+    } else {
+      logCheck(`${notable.length} notable email(s), none actionable — no nudge`);
+    }
   }
 
   // Check for open threads (sent > 24h ago, no reply yet)
