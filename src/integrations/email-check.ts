@@ -659,6 +659,53 @@ Reply with just one word: NEWSLETTER or PERSONAL.`;
   }
 }
 
+// ── FYI heuristic pre-filter ──────────────────────────────────────────────────
+
+const FYI_SUBJECT_PATTERNS: RegExp[] = [
+  /\bFYI\b/i,
+  /\bjust\s+(an?\s+)?FYI\b/i,
+  /\bfor\s+your\s+(info|information|awareness|reference|records)\b/i,
+  /\bjust\s+(letting|wanted\s+to\s+let)\s+you\s+know\b/i,
+  /\bno\s+(action|response)\s+(needed|required|necessary)\b/i,
+  /\bheads\s+up\b/i,
+  /\bstatus\s+update\b/i,
+  /\bweekly\s+(update|report|recap|summary|digest)\b/i,
+  /\bmonthly\s+(update|report|recap|summary|digest)\b/i,
+  /\bdaily\s+(update|report|recap|summary|digest)\b/i,
+  /\bproject\s+update\b/i,
+  /\bteam\s+update\b/i,
+  /\bFYA\b/, // "for your awareness"
+];
+
+const FYI_SNIPPET_PATTERNS: RegExp[] = [
+  /\bjust\s+(an?\s+)?FYI\b/i,
+  /\bjust\s+(letting|wanted\s+to\s+let)\s+you\s+know\b/i,
+  /\bno\s+(action|response)\s+(needed|required|necessary)\b/i,
+  /\bfor\s+your\s+(info|information|awareness|reference|records)\b/i,
+  /\bno\s+need\s+to\s+(respond|reply|do\s+anything)\b/i,
+  /\bnothing\s+(needed|required)\s+(from|on)\s+your\s+(end|part|side)\b/i,
+];
+
+/**
+ * Cheap heuristic to detect obvious FYI-only emails before spending
+ * an AI call. Returns true if the email looks like a pure FYI.
+ */
+function isFyiEmailHeuristic(email: NewEmail): boolean {
+  for (const pattern of FYI_SUBJECT_PATTERNS) {
+    if (pattern.test(email.subject)) return true;
+  }
+
+  const textToCheck = email.body
+    ? email.body.slice(0, 500)
+    : email.snippet;
+
+  for (const pattern of FYI_SNIPPET_PATTERNS) {
+    if (pattern.test(textToCheck)) return true;
+  }
+
+  return false;
+}
+
 // ── AI actionability classification ───────────────────────────────────────────
 
 /**
@@ -670,14 +717,31 @@ Reply with just one word: NEWSLETTER or PERSONAL.`;
  * Falls back to true (let it through) on failure.
  */
 async function classifyActionability(email: NewEmail): Promise<boolean> {
+  // Cheap heuristic check first — skip AI call for obvious FYIs
+  if (isFyiEmailHeuristic(email)) {
+    logCheck(`Heuristic detected FYI email: ${email.from} — ${email.subject}`);
+    return false;
+  }
+
   const client = getAnthropicClient();
   if (!client) return true; // No API key → let it through
 
   const body = email.body ? `\nBody:\n${email.body.slice(0, 2000)}` : "";
 
-  const prompt = `Does this email require the recipient to take a specific action (reply, fill out a form, meet a deadline, make a decision, attend something, etc.)?
+  const prompt = `Does this email require the recipient to take a specific action?
 
-Or is it purely informational with NO action needed — like an FYI, status update, announcement, confirmation of something already done, or "just letting you know" type email?
+ACTIONABLE means: the recipient must reply, fill out a form, meet a deadline, make a decision, attend something, approve something, review a document, complete a task, or respond in some way. There is a clear next step FOR THE RECIPIENT.
+
+FYI means: the email is purely informational with NO action needed. Examples:
+- Status updates, progress reports, project updates
+- Confirmations of something already completed ("your booking is confirmed", "payment received")
+- "Just letting you know" / "heads up" / "FYI" messages
+- Informational forwards ("thought you'd find this interesting")
+- Announcements, policy updates, organizational changes
+- Meeting notes or summaries (unless they assign action items TO the recipient)
+- Someone sharing what THEY did or will do (no ask of the recipient)
+
+If in doubt, lean toward FYI. Only classify as ACTIONABLE if there is a clear, specific ask of the recipient.
 
 From: ${email.from}
 Subject: ${email.subject}
@@ -862,16 +926,15 @@ async function checkNewEmails(): Promise<void> {
     }
 
     // Filter out FYI-only emails (no action needed)
+    // Note: starred emails still go through actionability check — being starred
+    // doesn't mean it's actionable; it just means it passed the marketing/newsletter filter.
     const actionable: NewEmail[] = [];
     for (const email of toNotify) {
-      // Starred emails bypass actionability check — explicit user signal
-      if (email.isStarred) {
-        actionable.push(email);
-        continue;
-      }
       const needsAction = await classifyActionability(email);
       if (needsAction) {
         actionable.push(email);
+      } else if (email.isStarred) {
+        logCheck(`Starred but FYI-only, skipping nudge: ${email.from} — ${email.subject}`);
       }
     }
 
