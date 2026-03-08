@@ -240,7 +240,7 @@ export async function callBrain(opts: {
     `[brain] calling claude with ${opts.history.length} history messages + current message (${opts.message.length} chars)${sessionTag}`,
   );
 
-  const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", EGG_MODEL];
+  const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", EGG_MODEL, "--effort", "high"];
   if (resuming) {
     args.push("--resume", currentSessionId!);
   }
@@ -274,6 +274,7 @@ export async function callBrain(opts: {
         const freshArgs = [
           "-p", freshPrompt, "--output-format", "json",
           "--dangerously-skip-permissions", "--model", EGG_MODEL,
+          "--effort", "high",
         ];
 
         const stdout = await spawnBrainProcess(freshArgs, freshPrompt);
