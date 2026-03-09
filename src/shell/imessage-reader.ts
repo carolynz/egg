@@ -539,6 +539,74 @@ function cleanMessageText(
 }
 
 /**
+ * Fetch the most recent N messages from the Egg iMessage conversation.
+ * Returns messages in chronological order with role and text.
+ * Used to provide conversation context to brain prompts.
+ */
+export function getRecentEggMessages(count = 20): { role: "user" | "assistant"; text: string; time: string }[] {
+  const eggAppleId = getEggAppleId();
+  if (!eggAppleId) return [];
+  if (!existsSync(CHAT_DB)) return [];
+
+  try {
+    const db = new Database(CHAT_DB, { fileMustExist: true });
+    db.pragma("query_only = ON");
+
+    const rows = db
+      .prepare(
+        `SELECT
+          m.text,
+          m.attributedBody,
+          m.is_from_me,
+          m.date / 1000000000 + 978307200 as unix_timestamp,
+          m.associated_message_type
+        FROM message m
+        WHERE m.account LIKE ?
+        ORDER BY m.date DESC
+        LIMIT ?`,
+      )
+      .all(`%${eggAppleId}%`, count * 2) as Array<{
+      text: string | null;
+      attributedBody: Buffer | null;
+      is_from_me: number;
+      unix_timestamp: number;
+      associated_message_type: number | null;
+    }>;
+
+    db.close();
+
+    const results: { role: "user" | "assistant"; text: string; time: string }[] = [];
+
+    for (const row of rows) {
+      // Skip reactions
+      if ((row.associated_message_type ?? 0) !== 0) continue;
+
+      const text = cleanMessageText(row.text, row.attributedBody);
+      if (!text) continue;
+
+      const ts = row.unix_timestamp;
+      const time = ts
+        ? new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ")
+        : "unknown";
+
+      results.push({
+        role: row.is_from_me ? "assistant" : "user",
+        text,
+        time,
+      });
+
+      if (results.length >= count) break;
+    }
+
+    // Reverse to chronological order
+    return results.reverse();
+  } catch (err) {
+    console.error("Failed to read recent Egg messages from chat.db:", err);
+    return [];
+  }
+}
+
+/**
  * Read ALL messages from chat.db (all threads, all accounts) since a given ROWID.
  * Used by iMessage ingestion to track the user's full social landscape.
  */

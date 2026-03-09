@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "os";
 import { join } from "path";
 import { callBrain } from "../brain/index.js";
+import { getRecentEggMessages } from "../shell/imessage-reader.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -115,6 +116,16 @@ function gatherContext(): string {
       }
     }
   } catch {}
+
+  // Recent iMessage conversation history
+  const recentMessages = getRecentEggMessages(20);
+  if (recentMessages.length > 0) {
+    const chatLines = recentMessages.map((m) => {
+      const tag = m.role === "user" ? "[human]" : "[egg]";
+      return `${tag} (${m.time}) ${m.text}`;
+    });
+    sections.push(`## Recent iMessage conversation\n${chatLines.join("\n")}`);
+  }
 
   // Recently sent nudges (last 48 hours)
   const recentSent = getRecentFiles(NUDGES_SENT_DIR, ".md", 10, 48 * 60 * 60 * 1000);

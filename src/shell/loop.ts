@@ -1,4 +1,4 @@
-import { getEggMessages, Message, Attachment } from "./imessage-reader.js";
+import { getEggMessages, getRecentEggMessages, Message, Attachment } from "./imessage-reader.js";
 import { BlueBubblesClient } from "./bluebubbles.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState, ShellState } from "./state.js";
@@ -360,8 +360,17 @@ export class ShellLoop {
     console.log(`--- End recovery message (${this.state.pendingMessage.length} chars) ---`);
     try {
       await this.bb.startTyping();
+      // Use chat.db history if state history is empty (e.g. after crash/restart)
+      let recoveryHistory = this.state.history;
+      if (recoveryHistory.length === 0) {
+        const dbMessages = getRecentEggMessages(20);
+        if (dbMessages.length > 0) {
+          recoveryHistory = dbMessages.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
+          console.log(`[recovery] state history empty — loaded ${recoveryHistory.length} messages from chat.db`);
+        }
+      }
       const reply = await callBrain({
-        history: this.state.history,
+        history: recoveryHistory,
         message: this.state.pendingMessage,
       });
       if (reply) {
@@ -584,10 +593,21 @@ export class ShellLoop {
     console.log(combinedText);
     console.log(`[brain] === PROMPT END ===`);
 
+    // Use state history if available, otherwise fall back to chat.db history
+    // (e.g. after a restart when state.history is empty)
+    let historyForBrain = this.state.history.slice(0, -1); // exclude the just-added user msg
+    if (historyForBrain.length === 0) {
+      const dbMessages = getRecentEggMessages(20);
+      if (dbMessages.length > 0) {
+        historyForBrain = dbMessages.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
+        console.log(`[poll] state history empty — loaded ${historyForBrain.length} messages from chat.db`);
+      }
+    }
+
     let reply: string;
     try {
       reply = await callBrain({
-        history: this.state.history.slice(0, -1), // exclude the just-added user msg
+        history: historyForBrain,
         message: combinedText,
         runningTasks: this.taskRunner.runningTaskSummaries,
       });
