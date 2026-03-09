@@ -76,14 +76,16 @@ export class TaskRunner {
     await this.sender.send(ack);
     this.recordHistory(ack);
 
-    // Build the full prompt with build/test instructions
+    // Build the full prompt with build/test/commit instructions
     const fullPrompt = [
       prompt,
       "",
-      "After making changes:",
+      "After making all changes:",
       "1. Run `npm run build` to compile",
       "2. Verify with `npx tsc --noEmit`",
       "3. If either fails, fix the errors before finishing",
+      "4. Stage and commit all changes with a descriptive message",
+      "5. Run `git push` to push the commit",
     ].join("\n");
 
     const args = ["-p", fullPrompt, "--dangerously-skip-permissions", "--output-format", "text", "--model", EGG_MODEL];
