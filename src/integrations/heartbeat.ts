@@ -127,6 +127,29 @@ function gatherContext(): string {
     sections.push(`## Recent iMessage conversation\n${chatLines.join("\n")}`);
   }
 
+  // Recently sent emails by the user (from email check poller)
+  const sentRecentPath = join(EGG_MEMORY_DIR, "data", "sent-recent.json");
+  const sentRecentContent = readFileSafe(sentRecentPath, 3000);
+  if (sentRecentContent) {
+    try {
+      const sentEmails = JSON.parse(sentRecentContent) as Array<{
+        threadId: string;
+        to: string[];
+        subject: string;
+        snippet: string;
+        timestamp: number;
+      }>;
+      if (sentEmails.length > 0) {
+        const sentLines = sentEmails.slice(0, 10).map((e) => {
+          const ago = Math.round((Date.now() - e.timestamp) / 3_600_000);
+          const recipient = e.to[0]?.replace(/<[^>]+>/, "").trim() || e.to[0] || "unknown";
+          return `- To ${recipient}: "${e.subject}" (${ago}h ago) — ${e.snippet.slice(0, 100)}`;
+        });
+        sections.push(`## Recent emails sent by user\n${sentLines.join("\n")}`);
+      }
+    } catch {}
+  }
+
   // Recently sent nudges (last 48 hours)
   const recentSent = getRecentFiles(NUDGES_SENT_DIR, ".md", 10, 48 * 60 * 60 * 1000);
   if (recentSent.length > 0) {
