@@ -43,8 +43,10 @@ interface SentThread {
 
 interface EmailCheckCursor {
   lastCheckAt: number;           // unix ms
+  lastSentCheckAt: number;       // unix ms — last time we fetched sent emails
   seenMessageIds: string[];      // recent IDs for dedup (keep last 500)
   sentThreads: SentThread[];     // outbound threads to watch for replies
+  repliedThreadIds: string[];    // threadIds where user has sent a reply (suppresses nudges)
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -55,6 +57,7 @@ const MAX_NUDGES_PER_CHECK = 3;
 const OPEN_THREAD_WINDOW_MS = 48 * 60 * 60 * 1000;   // 48 hours
 const OPEN_THREAD_MIN_AGE_MS = 24 * 60 * 60 * 1000;   // 24 hours
 const MAX_SENT_THREADS = 200;
+const MAX_REPLIED_THREAD_IDS = 500;
 
 function logCheck(message: string): void {
   console.log(`[email-check] ${message}`);
@@ -70,7 +73,7 @@ function loadCursor(): EmailCheckCursor {
       return JSON.parse(readFileSync(CURSOR_FILE, "utf-8"));
     }
   } catch {}
-  return { lastCheckAt: 0, seenMessageIds: [], sentThreads: [] };
+  return { lastCheckAt: 0, lastSentCheckAt: 0, seenMessageIds: [], sentThreads: [], repliedThreadIds: [] };
 }
 
 function saveCursor(cursor: EmailCheckCursor): void {
@@ -85,6 +88,10 @@ function saveCursor(cursor: EmailCheckCursor): void {
     cursor.sentThreads = cursor.sentThreads
       .filter((t) => !t.replied && t.sentAt > cutoff)
       .slice(-MAX_SENT_THREADS);
+    // Prune replied thread IDs to keep only the most recent
+    if (cursor.repliedThreadIds.length > MAX_REPLIED_THREAD_IDS) {
+      cursor.repliedThreadIds = cursor.repliedThreadIds.slice(-MAX_REPLIED_THREAD_IDS);
+    }
     writeFileSync(CURSOR_FILE, JSON.stringify(cursor, null, 2));
   } catch (err) {
     logCheck(`ERROR saving cursor: ${err}`);
@@ -215,6 +222,78 @@ async function fetchNewMessages(
   }
 
   return emails;
+}
+
+// ── Sent email fetch (for reply-tracking) ────────────────────────────────────
+
+interface SentEmailSummary {
+  threadId: string;
+  to: string[];
+  subject: string;
+  snippet: string;
+  timestamp: number;   // unix ms
+}
+
+async function fetchSentMessages(
+  auth: OAuth2Client,
+  afterEpoch: number,
+): Promise<SentEmailSummary[]> {
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const res = await gmail.users.messages.list({
+    userId: "me",
+    q: `is:sent after:${afterEpoch}`,
+    maxResults: 100,
+  });
+
+  const messageIds = (res.data.messages ?? [])
+    .map((m) => m.id)
+    .filter((id): id is string => !!id);
+
+  if (messageIds.length === 0) return [];
+
+  const sent: SentEmailSummary[] = [];
+  const BATCH_SIZE = 50;
+
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    const batch = messageIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map((id) =>
+        gmail.users.messages.get({
+          userId: "me",
+          id,
+          format: "metadata",
+          metadataHeaders: ["To", "Subject", "Date"],
+        }).catch((err) => {
+          logCheck(`WARNING: failed to fetch sent message ${id}: ${err}`);
+          return null;
+        }),
+      ),
+    );
+
+    for (const r of results) {
+      if (!r) continue;
+      const msg = r.data;
+      const headers = msg.payload?.headers ?? [];
+      const dateStr = getHeader(headers, "Date");
+      let timestamp: number;
+      try {
+        timestamp = new Date(dateStr).getTime();
+      } catch {
+        timestamp = Date.now();
+      }
+
+      sent.push({
+        threadId: msg.threadId ?? "",
+        to: parseAddressList(getHeader(headers, "To")),
+        subject: getHeader(headers, "Subject"),
+        snippet: msg.snippet ?? "",
+        timestamp,
+      });
+    }
+  }
+
+  return sent;
 }
 
 // ── Anthropic client (for email summarization) ──────────────────────────────
@@ -831,6 +910,26 @@ async function checkNewEmails(): Promise<void> {
   const seenSet = new Set(cursor.seenMessageIds);
   const knownNames = loadKnownContactNames();
   const sentThreadIds = new Set(cursor.sentThreads.map((t) => t.threadId));
+  const repliedThreadIds = new Set(cursor.repliedThreadIds ?? []);
+
+  // Fetch sent emails to track user replies
+  const sentCheckAfter = Math.floor((cursor.lastSentCheckAt || lastCheck) / 1000);
+  for (const account of accounts) {
+    try {
+      const client = await getAuthedClient(config, account);
+      const sentEmails = await fetchSentMessages(client, sentCheckAfter);
+      for (const sent of sentEmails) {
+        repliedThreadIds.add(sent.threadId);
+      }
+      if (sentEmails.length > 0) {
+        logCheck(`${sentEmails.length} sent email(s) found for ${account.email}`);
+      }
+    } catch (err) {
+      logCheck(`ERROR fetching sent emails for ${account.email}: ${err}`);
+    }
+  }
+  cursor.lastSentCheckAt = now;
+  cursor.repliedThreadIds = [...repliedThreadIds];
 
   let allNew: NewEmail[] = [];
   const messageAuthMap = new Map<string, OAuth2Client>();
@@ -909,7 +1008,16 @@ async function checkNewEmails(): Promise<void> {
     }
   }
 
-  const notable = genuineInbound.filter((e) => isNotableEmail(e, knownNames, sentThreadIds));
+  // Filter out emails in threads where the user has already sent a reply
+  const unreplied = genuineInbound.filter((e) => {
+    if (repliedThreadIds.has(e.threadId)) {
+      logCheck(`Skipping nudge (user already replied in thread): ${e.from} — ${e.subject}`);
+      return false;
+    }
+    return true;
+  });
+
+  const notable = unreplied.filter((e) => isNotableEmail(e, knownNames, sentThreadIds));
 
   if (notable.length > 0) {
     // Cap notifications to avoid spam
