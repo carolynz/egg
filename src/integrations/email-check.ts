@@ -38,6 +38,7 @@ interface SentThread {
   subject: string;
   sentAt: number;        // unix ms
   to: string[];
+  snippet: string;       // first ~200 chars of sent body
   replied: boolean;
 }
 
@@ -891,6 +892,45 @@ function isNotableEmail(
   return false;
 }
 
+// ── Sent email context for heartbeat ──────────────────────────────────────────
+
+const SENT_RECENT_FILE = join(EGG_MEMORY_DIR, "data", "sent-recent.json");
+
+function writeSentRecentFile(sentEmails: SentEmailSummary[]): void {
+  if (sentEmails.length === 0) return;
+  try {
+    mkdirSync(join(EGG_MEMORY_DIR, "data"), { recursive: true });
+
+    // Merge with existing file (keep last 48h of sent emails)
+    let existing: SentEmailSummary[] = [];
+    try {
+      if (existsSync(SENT_RECENT_FILE)) {
+        existing = JSON.parse(readFileSync(SENT_RECENT_FILE, "utf-8"));
+      }
+    } catch {}
+
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const merged = [...existing, ...sentEmails]
+      .filter((e) => e.timestamp > cutoff)
+      // Dedupe by threadId (keep most recent)
+      .reduce((acc, e) => {
+        const idx = acc.findIndex((a) => a.threadId === e.threadId);
+        if (idx >= 0) {
+          if (e.timestamp > acc[idx].timestamp) acc[idx] = e;
+        } else {
+          acc.push(e);
+        }
+        return acc;
+      }, [] as SentEmailSummary[])
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 50);
+
+    writeFileSync(SENT_RECENT_FILE, JSON.stringify(merged, null, 2));
+  } catch (err) {
+    logCheck(`ERROR writing sent-recent.json: ${err}`);
+  }
+}
+
 // ── Main check function ──────────────────────────────────────────────────────
 
 async function checkNewEmails(): Promise<void> {
@@ -914,12 +954,24 @@ async function checkNewEmails(): Promise<void> {
 
   // Fetch sent emails to track user replies
   const sentCheckAfter = Math.floor((cursor.lastSentCheckAt || lastCheck) / 1000);
+  const allSentEmails: SentEmailSummary[] = [];
   for (const account of accounts) {
     try {
       const client = await getAuthedClient(config, account);
       const sentEmails = await fetchSentMessages(client, sentCheckAfter);
       for (const sent of sentEmails) {
         repliedThreadIds.add(sent.threadId);
+        allSentEmails.push(sent);
+
+        // Update sentThreads with richer data from dedicated sent fetch
+        const existing = cursor.sentThreads.find((t) => t.threadId === sent.threadId);
+        if (existing) {
+          // Update with most recent sent timestamp and snippet
+          if (sent.timestamp > existing.sentAt) {
+            existing.sentAt = sent.timestamp;
+            existing.snippet = sent.snippet.slice(0, 200);
+          }
+        }
       }
       if (sentEmails.length > 0) {
         logCheck(`${sentEmails.length} sent email(s) found for ${account.email}`);
@@ -930,6 +982,9 @@ async function checkNewEmails(): Promise<void> {
   }
   cursor.lastSentCheckAt = now;
   cursor.repliedThreadIds = [...repliedThreadIds];
+
+  // Write sent-recent.json for heartbeat context
+  writeSentRecentFile(allSentEmails);
 
   let allNew: NewEmail[] = [];
   const messageAuthMap = new Map<string, OAuth2Client>();
@@ -961,6 +1016,7 @@ async function checkNewEmails(): Promise<void> {
               subject: email.subject,
               sentAt: now,
               to: email.to,
+              snippet: email.snippet.slice(0, 200),
               replied: false,
             });
             sentThreadIds.add(email.threadId);
