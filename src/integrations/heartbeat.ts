@@ -1,8 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { callBrain } from "../brain/index.js";
 import { getRecentEggMessages } from "../shell/imessage-reader.js";
+import { generateTodayMd, generateMorningNudge } from "../senses/daily-planner.js";
+import { updateWeekStart } from "../senses/goal-progress.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -69,6 +71,18 @@ function gatherContext(): string {
   const goals = readFileSafe(join(EGG_MEMORY_DIR, "goals.yaml"), 3000);
   if (goals) {
     sections.push(`## goals.yaml\n${goals}`);
+  }
+
+  // today.md — the structured daily plan (if generated)
+  const todayPlan = readFileSafe(join(EGG_MEMORY_DIR, "today.md"), 3000);
+  if (todayPlan) {
+    sections.push(`## Today's plan (today.md)\n${todayPlan}`);
+  }
+
+  // goal-progress.yaml — weekly goal tracking
+  const goalProgress = readFileSafe(join(EGG_MEMORY_DIR, "goal-progress.yaml"), 1500);
+  if (goalProgress) {
+    sections.push(`## Goal progress (this week)\n${goalProgress}`);
   }
 
   // Recent daily digests (last 3 days)
@@ -180,12 +194,55 @@ function buildHeartbeatPrompt(context: string): string {
     "- Good reasons to nudge: a goal deadline is approaching, it's a good time of day for a habit they're tracking, they haven't done something they usually do by this time, encouragement after a tough day, a timely reminder tied to their goals.",
     "- Bad reasons to nudge: nothing specific to say, a similar nudge was sent recently, it's not a natural time for the nudge topic.",
     "- Check the recently sent nudges to avoid repeating yourself or spamming.",
+    "- If today.md exists, use it as the source of truth for what the plan was. Hold the human accountable to it — if something from must-do or should-do hasn't been done and time is passing, that's a good reason to nudge.",
+    "- If goal-progress shows falling behind (e.g. 0/3 workouts and it's Wednesday), that's a strong reason to nudge.",
+    "- Be specific in nudges — reference actual tasks and calendar events, not generic encouragement.",
+    "- Pre-fill decisions when possible ('25 min workout between the 2-4pm gap — squat, rows, press' not 'maybe work out today').",
     "- If you decide to nudge: write the nudge text to a new file at nudges/<timestamp>.md where <timestamp> is the current ISO timestamp with colons/dots replaced by dashes. The file should contain only the nudge text (one line per text message). Keep it short and natural — 1-3 lines max.",
     "- If no nudge is warranted: do nothing, output nothing. It's completely fine to skip.",
   ].join("\n");
 }
 
 // ── HeartbeatPoller ───────────────────────────────────────────────────────────
+
+// ── Morning planner ─────────────────────────────────────────────────────────
+
+/** Check if today.md has already been generated for today */
+function isTodayPlanCurrent(): boolean {
+  const todayPath = join(EGG_MEMORY_DIR, "today.md");
+  if (!existsSync(todayPath)) return false;
+  const content = readFileSync(todayPath, "utf-8");
+  const today = new Date().toISOString().slice(0, 10);
+  return content.includes(today);
+}
+
+/** Run morning planner: generate today.md + write morning nudge */
+async function runMorningPlanner(): Promise<void> {
+  logHeartbeat("Running morning planner — generating today.md...");
+
+  try {
+    // Ensure goal progress week is current
+    updateWeekStart();
+
+    // Generate today.md
+    await generateTodayMd();
+    logHeartbeat("today.md generated successfully");
+
+    // Generate and write morning nudge
+    const nudgeText = await generateMorningNudge();
+    if (nudgeText.trim()) {
+      mkdirSync(NUDGES_DIR, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const nudgePath = join(NUDGES_DIR, `${timestamp}.md`);
+      writeFileSync(nudgePath, nudgeText);
+      logHeartbeat(`Morning nudge written to ${nudgePath}`);
+    }
+  } catch (err) {
+    logHeartbeat(`ERROR in morning planner: ${err}`);
+  }
+}
+
+// ── HeartbeatPoller ───────────────────────────────────────────────────────
 
 export class HeartbeatPoller {
   private intervalId: NodeJS.Timeout | null = null;
@@ -221,6 +278,12 @@ export class HeartbeatPoller {
           logHeartbeat(`${pending.length} pending nudge(s) already queued — skipping`);
           return;
         }
+      }
+
+      // Morning planner: generate today.md on first heartbeat after quiet hours
+      if (!isTodayPlanCurrent()) {
+        await runMorningPlanner();
+        return; // Morning planner already wrote a nudge, skip regular heartbeat
       }
 
       logHeartbeat("Running heartbeat check...");

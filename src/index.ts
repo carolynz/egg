@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { ShellLoop } from "./shell/loop.js";
 import { callBrain } from "./brain/index.js";
-import { senseDaily, senseImessage } from "./senses/index.js";
+import { senseDaily, senseImessage, generateTodayMd } from "./senses/index.js";
 import { runOnboard } from "./commands/onboard.js";
 import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
@@ -153,6 +153,15 @@ intake
   .action(async () => {
     checkMemoryDir();
     await senseDaily();
+  });
+
+intake
+  .command("today")
+  .description("Generate today.md — structured daily plan from calendar, goals, backlog, and emails")
+  .action(async () => {
+    checkMemoryDir();
+    await generateTodayMd();
+    console.log("today.md generated successfully");
   });
 
 // ── oura:auth ──
