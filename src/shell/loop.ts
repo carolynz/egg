@@ -6,7 +6,7 @@ import { callBrain, initBrainSession } from "../brain/index.js";
 import { getEggUserPhone, NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
 import { TaskRunner } from "./tasks.js";
 import { generateImage } from "./image-gen.js";
-import { OuraPoller } from "../integrations/oura.js";
+import { OuraPoller, hasMorningNudgeToday, triggerMorningNudge } from "../integrations/oura.js";
 import { HeartbeatPoller } from "../integrations/heartbeat.js";
 import { ImessageIngestPoller } from "../senses/imessage-ingest.js";
 import { GoogleIngestPoller } from "../integrations/google-ingest.js";
@@ -464,6 +464,23 @@ export class ShellLoop {
     }
   }
 
+  /**
+   * Fallback wake detection: if an inbound iMessage arrives after 5am and no
+   * morning nudge has been sent today, treat it as the wake signal and trigger
+   * the morning planner. This covers cases where Oura data is unavailable
+   * (ring dead, not worn, sync issues).
+   */
+  private async checkImessageWakeFallback(): Promise<void> {
+    const hour = new Date().getHours();
+    if (hour < 5) return; // before 5am = late-night messages, not wake
+
+    const todayDate = new Date().toISOString().slice(0, 10);
+    if (hasMorningNudgeToday(todayDate)) return; // already sent
+
+    console.log("[wake-fallback] first iMessage after 5am with no morning nudge — triggering morning planner");
+    await triggerMorningNudge("imessage-fallback");
+  }
+
   async pollOnce(): Promise<boolean> {
     // 0. Deliver pending nudges and check for tasks
     await this.deliverNudges();
@@ -525,6 +542,10 @@ export class ShellLoop {
 
     const senders = [...new Set(inbound.map((m) => m.sender))].join(", ");
     console.log(`[route] ${inbound.length} inbound user message(s) from ${senders}`);
+
+    // Fallback wake detection: first iMessage after 5am triggers morning nudge
+    // if Oura hasn't already fired it
+    await this.checkImessageWakeFallback();
 
     // 4. Debounce: wait for user to finish typing
     console.log(`[poll] debouncing — waiting for user to stop typing...`);
