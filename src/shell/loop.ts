@@ -126,7 +126,7 @@ async function captionImage(filepath: string): Promise<string> {
     try {
       const response = await client.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 64,
+        max_tokens: 1024,
         messages: [
           {
             role: "user",
@@ -137,7 +137,7 @@ async function captionImage(filepath: string): Promise<string> {
               },
               {
                 type: "text",
-                text: "Describe this image in one short sentence (under 15 words). Just the description, no preamble.",
+                text: "First, describe this image in one short sentence (under 15 words). Then, if there is ANY visible text in the image (tweets, captions, usernames, article text, UI labels, etc.), add a newline and transcribe ALL of it verbatim under a 'Text:' heading. Transcribe every word exactly as shown. If there is no text, just provide the description.",
               },
             ],
           },
