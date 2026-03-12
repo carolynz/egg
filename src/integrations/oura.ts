@@ -1,9 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { createServer } from "http";
 import { execSync } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
-import { NUDGES_DIR } from "../config.js";
+import { NUDGES_DIR, NUDGES_SENT_DIR } from "../config.js";
+import { generateTodayMd, generateMorningNudge } from "../senses/daily-planner.js";
+import { updateWeekStart } from "../senses/goal-progress.js";
 
 // ── OAuth2 constants ──────────────────────────────────────────────────────────
 
@@ -280,14 +282,28 @@ function buildOuraFollowUpMessage(data: {
   return lines.join("\n");
 }
 
+// ── Dedup helper ──────────────────────────────────────────────────────────────
+
+/** Check if a morning nudge was already sent today by scanning nudges/sent/ filenames */
+function hasMorningNudgeToday(todayDate: string): boolean {
+  try {
+    if (!existsSync(NUDGES_SENT_DIR)) return false;
+    // Sent nudge files are named like 2026-03-12T08-30-00-000Z.md
+    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => f.startsWith(todayDate) && f.endsWith(".md"));
+    return files.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // ── Wake detection ────────────────────────────────────────────────────────────
 
 async function checkWakeUp(token: string): Promise<void> {
   const now = new Date();
   const hour = now.getHours();
 
-  // Only check between 5am and 12pm
-  if (hour < 5 || hour >= 12) return;
+  // Only check between 5am and 1pm (noon fallback needs to fire at 12)
+  if (hour < 5 || hour >= 13) return;
 
   const todayDate = now.toISOString().slice(0, 10);
   const state = loadOuraState();
@@ -317,34 +333,48 @@ async function checkWakeUp(token: string): Promise<void> {
     return wakeTime >= thirtyMinAgo && wakeTime <= now;
   });
 
-  // Time-based fallback: if 7–9am, fire even without recent wake detection
-  const isTimeBasedTrigger = hour >= 7 && hour < 9;
+  // Fallback: if no wake detected by noon, fire anyway
+  const isNoonFallback = hour >= 12 && !recentWake;
 
-  if (!recentWake && !isTimeBasedTrigger) {
-    logOura(`No recent wake in last 30 min (${sessions.length} sessions checked), not in 7–9am window — skipping`);
+  if (!recentWake && !isNoonFallback) {
+    logOura(`No recent wake in last 30 min (${sessions.length} sessions checked), not yet noon fallback — skipping`);
     return;
   }
 
   if (recentWake) {
     logOura(`Wake detected: bedtime_end=${recentWake.bedtime_end} day=${recentWake.day}`);
   } else {
-    logOura(`Time-based trigger (${hour}:xx in 7–9am window) — firing good morning nudge`);
+    logOura(`Noon fallback — no Oura wake detected by noon, firing morning planner`);
   }
 
-  // Morning nudge: routine reminders only, no Oura data (hasn't synced yet)
-  const message = buildGoodMorningMessage();
+  // Dedup: check nudges/sent/ for today's date before writing
+  if (hasMorningNudgeToday(todayDate)) {
+    logOura("Morning nudge already sent today (found in nudges/sent/) — skipping");
+    state.lastNotifiedWakeDate = todayDate;
+    saveOuraState(state);
+    return;
+  }
 
-  const timestamp = now.toISOString().replace(/[:.]/g, "-");
-  const nudgeFile = join(NUDGES_DIR, `${timestamp}.md`);
-
+  // Run full morning planner: generate today.md + smart morning nudge
   try {
-    mkdirSync(NUDGES_DIR, { recursive: true });
-    writeFileSync(nudgeFile, message);
-    logOura(`Good morning nudge written: ${nudgeFile}`);
+    logOura("Running full morning planner from wake detection...");
+    updateWeekStart();
+    await generateTodayMd();
+    logOura("today.md generated successfully");
+
+    const nudgeText = await generateMorningNudge();
+    if (nudgeText.trim()) {
+      mkdirSync(NUDGES_DIR, { recursive: true });
+      const timestamp = now.toISOString().replace(/[:.]/g, "-");
+      const nudgeFile = join(NUDGES_DIR, `${timestamp}.md`);
+      writeFileSync(nudgeFile, nudgeText);
+      logOura(`Morning nudge written: ${nudgeFile}`);
+    }
+
     state.lastNotifiedWakeDate = todayDate;
     saveOuraState(state);
   } catch (err) {
-    logOura(`ERROR writing nudge file: ${err}`);
+    logOura(`ERROR in morning planner: ${err}`);
   }
 }
 

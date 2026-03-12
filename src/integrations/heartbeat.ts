@@ -203,7 +203,19 @@ function buildHeartbeatPrompt(context: string): string {
   ].join("\n");
 }
 
-// ── HeartbeatPoller ───────────────────────────────────────────────────────────
+// ── Dedup helper ────────────────────────────────────────────────────────────
+
+/** Check if a morning nudge was already sent today by scanning nudges/sent/ filenames */
+function hasMorningNudgeSentToday(): boolean {
+  try {
+    if (!existsSync(NUDGES_SENT_DIR)) return false;
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => f.startsWith(todayDate) && f.endsWith(".md"));
+    return files.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // ── Morning planner ─────────────────────────────────────────────────────────
 
@@ -280,10 +292,22 @@ export class HeartbeatPoller {
         }
       }
 
-      // Morning planner: generate today.md on first heartbeat after quiet hours
+      // Morning planner: generate today.md if stale, but only write a nudge
+      // if no morning nudge was already sent today (Oura wake detection may have sent one)
       if (!isTodayPlanCurrent()) {
-        await runMorningPlanner();
-        return; // Morning planner already wrote a nudge, skip regular heartbeat
+        if (hasMorningNudgeSentToday()) {
+          logHeartbeat("today.md stale but morning nudge already sent today — regenerating today.md only");
+          try {
+            updateWeekStart();
+            await generateTodayMd();
+            logHeartbeat("today.md regenerated (skipped nudge — already sent)");
+          } catch (err) {
+            logHeartbeat(`ERROR regenerating today.md: ${err}`);
+          }
+        } else {
+          await runMorningPlanner();
+        }
+        return;
       }
 
       logHeartbeat("Running heartbeat check...");
