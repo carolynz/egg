@@ -137,7 +137,7 @@ async function captionImage(filepath: string): Promise<string> {
               },
               {
                 type: "text",
-                text: "First, describe this image in one short sentence (under 15 words). Then, if there is ANY visible text in the image (tweets, captions, usernames, article text, UI labels, etc.), add a newline and transcribe ALL of it verbatim under a 'Text:' heading. Transcribe every word exactly as shown. If there is no text, just provide the description.",
+                text: "Describe this image in one short sentence (under 15 words). Then, if there is ANY visible text in the image (tweets, screenshots, signs, captions, handwriting, etc.), transcribe ALL of it exactly as written. Format: Description: <visual description> | Text: <full transcription> — or just the description if there's no text.",
               },
             ],
           },
