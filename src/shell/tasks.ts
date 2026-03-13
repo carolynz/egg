@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { EGG_BRAIN, EGG_MODEL, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir, getGitHubRepoUrl } from "../config.js";
+import { EGG_BRAIN, EGG_MODEL, TASKS_DIR, TASKS_DONE_DIR, getEggCodeDir, getGitHubRepoUrlForDir } from "../config.js";
 import { Sender } from "./sender.js";
 import { loadState, saveState } from "./state.js";
 import { logTaskStart, logTaskEnd } from "../logger.js";
@@ -15,8 +15,32 @@ import { logTaskStart, logTaskEnd } from "../logger.js";
 interface RunningTask {
   id: string;
   prompt: string;
+  codeDir: string;
   startedAt: Date;
   process: ReturnType<typeof spawn>;
+}
+
+/**
+ * Parse a working directory from the task prompt.
+ * Looks for absolute paths like /Users/egg/translate-tutor that exist on disk.
+ * Returns the first match that is a directory and is a git repo, or null.
+ */
+function parseCodeDirFromPrompt(prompt: string): string | null {
+  // Match absolute paths that look like project directories (not egg-memory)
+  const pathMatches = prompt.match(/\/Users\/\w+\/[\w.-]+/g);
+  if (!pathMatches) return null;
+
+  for (const p of pathMatches) {
+    // Skip egg-memory — that's not where the "real work" happens
+    if (p.includes("egg-memory")) continue;
+    try {
+      const stat = require("fs").statSync(p);
+      if (stat.isDirectory() && existsSync(join(p, ".git"))) {
+        return p;
+      }
+    } catch {}
+  }
+  return null;
 }
 
 export class TaskRunner {
@@ -55,15 +79,22 @@ export class TaskRunner {
   }
 
   private async startTask(id: string, prompt: string, filePath: string): Promise<void> {
+    // Detect working directory: prefer explicit path in task content, fall back to egg code dir
     let codeDir: string;
-    try {
-      codeDir = getEggCodeDir();
-    } catch (err) {
-      console.error("Cannot run task:", err);
-      await this.sender.send(`❌ can't run task — EGG_CODE_DIR not set in .env`);
-      // Move to done with error
-      this.moveToDown(id, prompt, 1, "EGG_CODE_DIR not configured");
-      return;
+    const parsedDir = parseCodeDirFromPrompt(prompt);
+    if (parsedDir) {
+      codeDir = parsedDir;
+      console.log(`[task] detected working directory from prompt: ${codeDir}`);
+    } else {
+      try {
+        codeDir = getEggCodeDir();
+      } catch (err) {
+        console.error("Cannot run task:", err);
+        await this.sender.send(`❌ can't run task — EGG_CODE_DIR not set in .env`);
+        // Move to done with error
+        this.moveToDown(id, prompt, 1, "EGG_CODE_DIR not configured");
+        return;
+      }
     }
 
     const preview = prompt.slice(0, 200);
@@ -96,7 +127,7 @@ export class TaskRunner {
       env: { ...process.env, ANTHROPIC_API_KEY: undefined },
     });
 
-    const task: RunningTask = { id, prompt, startedAt: new Date(), process: child };
+    const task: RunningTask = { id, prompt, codeDir, startedAt: new Date(), process: child };
     this.running.set(id, task);
 
     // Remove the pending task file now that we've started
@@ -132,14 +163,14 @@ export class TaskRunner {
         console.log(`[task] ${id} completed in ${duration}s`);
         let msg = `✅ task ${id} done (${duration}s)\n${summary}`;
 
-        // Append commit link if we can detect the repo and latest commit
+        // Append commit link from the repo where the task actually ran
         try {
           const hash = execSync("git rev-parse HEAD", {
-            cwd: getEggCodeDir(),
+            cwd: task.codeDir,
             stdio: ["ignore", "pipe", "ignore"],
             timeout: 5000,
           }).toString().trim();
-          const repoUrl = getGitHubRepoUrl();
+          const repoUrl = getGitHubRepoUrlForDir(task.codeDir);
           if (repoUrl && hash) {
             msg += `\n🔗 ${repoUrl}/commit/${hash}`;
           }

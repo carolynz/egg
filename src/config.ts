@@ -90,9 +90,15 @@ let _gitHubRepoUrl: string | null | undefined;
 
 export function getGitHubRepoUrl(): string | null {
   if (_gitHubRepoUrl !== undefined) return _gitHubRepoUrl;
+  _gitHubRepoUrl = getGitHubRepoUrlForDir(getEggCodeDir());
+  return _gitHubRepoUrl;
+}
+
+/** Get the GitHub repo URL for any directory by reading its git remote. */
+export function getGitHubRepoUrlForDir(cwd: string): string | null {
   try {
     const raw = execSync("git remote get-url origin", {
-      cwd: getEggCodeDir(),
+      cwd,
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
     }).toString().trim();
@@ -100,23 +106,18 @@ export function getGitHubRepoUrl(): string | null {
     // SSH: git@github.com:owner/repo.git → https://github.com/owner/repo
     const sshMatch = raw.match(/^git@github\.com:(.+?)(?:\.git)?$/);
     if (sshMatch) {
-      _gitHubRepoUrl = `https://github.com/${sshMatch[1]}`;
-      return _gitHubRepoUrl;
+      return `https://github.com/${sshMatch[1]}`;
     }
 
     // HTTPS: https://github.com/owner/repo.git → https://github.com/owner/repo
     const httpsMatch = raw.match(/^https:\/\/github\.com\/(.+?)(?:\.git)?$/);
     if (httpsMatch) {
-      _gitHubRepoUrl = `https://github.com/${httpsMatch[1]}`;
-      return _gitHubRepoUrl;
+      return `https://github.com/${httpsMatch[1]}`;
     }
 
-    // Unknown format — return null
     console.warn(`[config] unrecognized git remote format: ${raw}`);
-    _gitHubRepoUrl = null;
     return null;
   } catch {
-    _gitHubRepoUrl = null;
     return null;
   }
 }
