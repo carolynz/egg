@@ -45,8 +45,8 @@ export const HEARTBEAT_INTERVAL_MS = parseInt(env("HEARTBEAT_INTERVAL_MS") || ""
 // iMessage ingestion poller interval (default 30 minutes)
 export const IMESSAGE_INGEST_INTERVAL_MS = parseInt(env("IMESSAGE_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 
-// Google (Gmail + Calendar) ingestion poller interval (default 5 minutes)
-export const GOOGLE_INGEST_INTERVAL_MS = parseInt(env("GOOGLE_INGEST_INTERVAL_MS") || "", 10) || 5 * 60 * 1000;
+// Google (Gmail + Calendar) ingestion poller interval (default 1 minute)
+export const GOOGLE_INGEST_INTERVAL_MS = parseInt(env("GOOGLE_INGEST_INTERVAL_MS") || "", 10) || 1 * 60 * 1000;
 
 // Photos library ingestion poller interval (default 30 minutes)
 export const PHOTOS_INGEST_INTERVAL_MS = parseInt(env("PHOTOS_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
