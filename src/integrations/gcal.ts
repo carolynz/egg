@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
@@ -46,8 +46,11 @@ async function fetchCalendarEvents(
 ): Promise<CalendarEvent[]> {
   const cal = google.calendar({ version: "v3", auth });
 
-  // List all calendars the user has access to
-  const calListRes = await cal.calendarList.list();
+  // List all calendars the user has access to (including hidden/restricted)
+  const calListRes = await cal.calendarList.list({
+    showHidden: true,
+    minAccessRole: "reader",
+  });
   const calendars = calListRes.data.items ?? [];
 
   const allEvents: CalendarEvent[] = [];
@@ -110,6 +113,42 @@ function groupByDate(events: CalendarEvent[]): Map<string, CalendarEvent[]> {
 
 // ── Write calendar data to egg-memory ────────────────────────────────────────
 
+function mergeEvents(
+  existing: CalendarEvent[],
+  incoming: CalendarEvent[],
+  date: string,
+  account: string,
+): CalendarEvent[] {
+  const incomingById = new Map(incoming.map((e) => [e.id, e]));
+  const merged = new Map<string, CalendarEvent>();
+
+  // Start with existing events — keep unless explicitly cancelled in API response
+  for (const ev of existing) {
+    const fresh = incomingById.get(ev.id);
+    if (fresh) {
+      // API returned this event — use the updated version
+      if (fresh.status === "cancelled") {
+        logGoogle(`Calendar [${account}] ${date}: removed cancelled event "${ev.title}" (${ev.id})`);
+      } else {
+        merged.set(ev.id, fresh);
+      }
+      incomingById.delete(ev.id);
+    } else {
+      // API didn't return this event — keep it (may be a transient omission)
+      merged.set(ev.id, ev);
+    }
+  }
+
+  // Add any new events not previously seen
+  for (const [id, ev] of incomingById) {
+    if (ev.status === "cancelled") continue;
+    merged.set(id, ev);
+    logGoogle(`Calendar [${account}] ${date}: added event "${ev.title}" (${ev.id})`);
+  }
+
+  return [...merged.values()];
+}
+
 function writeCalendarData(account: string, events: CalendarEvent[]): void {
   const dir = getCalendarDir();
   const accountDir = join(dir, account.replace(/@/g, "_at_").replace(/\./g, "_"));
@@ -118,28 +157,48 @@ function writeCalendarData(account: string, events: CalendarEvent[]): void {
   const byDate = groupByDate(events);
   const sortedDates = [...byDate.keys()].sort();
 
+  // Also load dates from existing files that may not appear in the current API response
+  const allDates = new Set(sortedDates);
+
   for (const date of sortedDates) {
-    const dayEvents = byDate.get(date)!;
+    const filePath = join(accountDir, `${date}.json`);
+    const incoming = byDate.get(date)!;
+
+    // Load existing events for this date
+    let existing: CalendarEvent[] = [];
+    if (existsSync(filePath)) {
+      try {
+        const raw = JSON.parse(readFileSync(filePath, "utf-8")) as CalendarDayFile;
+        existing = raw.events;
+      } catch {
+        // Corrupted file — overwrite with incoming data
+      }
+    }
+
+    const merged = mergeEvents(existing, incoming, date, account);
     const dayFile: CalendarDayFile = {
       date,
       account,
-      events: dayEvents,
+      events: merged,
     };
-    writeFileSync(join(accountDir, `${date}.json`), JSON.stringify(dayFile, null, 2));
+    writeFileSync(filePath, JSON.stringify(dayFile, null, 2));
+    allDates.add(date);
   }
+
+  const finalDates = [...allDates].sort();
 
   // Write a summary index
   const summary = {
     account,
-    dateRange: { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] },
+    dateRange: { from: finalDates[0], to: finalDates[finalDates.length - 1] },
     totalEvents: events.length,
-    totalDays: sortedDates.length,
+    totalDays: finalDates.length,
     calendars: [...new Set(events.map((e) => e.calendar))],
     pulledAt: new Date().toISOString(),
   };
   writeFileSync(join(accountDir, "_index.json"), JSON.stringify(summary, null, 2));
 
-  logGoogle(`Calendar: wrote ${events.length} events across ${sortedDates.length} days for ${account}`);
+  logGoogle(`Calendar: wrote ${events.length} events across ${finalDates.length} days for ${account}`);
 }
 
 // ── Main intake function ─────────────────────────────────────────────────────
