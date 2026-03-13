@@ -4,6 +4,8 @@ import { join } from "path";
 import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
 import Anthropic from "@anthropic-ai/sdk";
+// @ts-ignore — pdf-parse has no type declarations
+import pdfParse from "pdf-parse";
 import {
   getGoogleOAuthConfig,
   loadAllAccounts,
@@ -15,6 +17,12 @@ import { EMAIL_CHECK_LOG } from "../logger.js";
 import { recordTokenUsage } from "../token-tracker.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
+
+interface PdfAttachmentMeta {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+}
 
 interface NewEmail {
   id: string;
@@ -31,6 +39,7 @@ interface NewEmail {
   autoSubmitted: string;      // Auto-Submitted header value (e.g. "auto-replied")
   categoryLabels: string[];   // CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, etc.
   body?: string;              // full text body (fetched on demand for notable emails)
+  attachmentTexts?: string[]; // extracted text from PDF attachments
 }
 
 interface SentThread {
@@ -346,7 +355,12 @@ function extractTextBody(payload: any): string {
   return "";
 }
 
-async function fetchEmailBody(auth: OAuth2Client, messageId: string): Promise<string> {
+interface FetchedEmailContent {
+  body: string;
+  attachmentTexts: string[];
+}
+
+async function fetchEmailContent(auth: OAuth2Client, messageId: string): Promise<FetchedEmailContent> {
   const gmail = google.gmail({ version: "v1", auth });
   try {
     const res = await gmail.users.messages.get({
@@ -354,11 +368,97 @@ async function fetchEmailBody(auth: OAuth2Client, messageId: string): Promise<st
       id: messageId,
       format: "full",
     });
-    return extractTextBody(res.data.payload) || "";
+    const body = extractTextBody(res.data.payload) || "";
+    const attachmentTexts = await fetchPdfAttachmentTexts(auth, messageId, res.data.payload);
+    return { body, attachmentTexts };
   } catch (err) {
-    logCheck(`WARNING: failed to fetch body for ${messageId}: ${err}`);
-    return "";
+    logCheck(`WARNING: failed to fetch content for ${messageId}: ${err}`);
+    return { body: "", attachmentTexts: [] };
   }
+}
+
+async function fetchEmailBody(auth: OAuth2Client, messageId: string): Promise<string> {
+  const { body } = await fetchEmailContent(auth, messageId);
+  return body;
+}
+
+// ── PDF attachment extraction ─────────────────────────────────────────────────
+
+const MAX_PDF_ATTACHMENTS = 3;
+const MAX_PDF_TEXT_CHARS = 2000;
+
+function findPdfAttachments(payload: any): PdfAttachmentMeta[] {
+  const results: PdfAttachmentMeta[] = [];
+
+  function walk(part: any): void {
+    if (part.filename && part.mimeType === "application/pdf" && part.body?.attachmentId) {
+      results.push({
+        attachmentId: part.body.attachmentId,
+        filename: part.filename,
+        mimeType: part.mimeType,
+      });
+    }
+    if (part.parts) {
+      for (const child of part.parts) walk(child);
+    }
+  }
+
+  if (payload) walk(payload);
+  return results;
+}
+
+function decodeBase64UrlToBuffer(data: string): Buffer {
+  const base64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64");
+}
+
+async function downloadAndExtractPdf(
+  auth: OAuth2Client,
+  messageId: string,
+  attachmentId: string,
+  filename: string,
+): Promise<string | null> {
+  const gmail = google.gmail({ version: "v1", auth });
+  try {
+    const res = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId,
+      id: attachmentId,
+    });
+
+    const data = res.data.data;
+    if (!data) {
+      logCheck(`WARNING: empty attachment data for ${filename} in ${messageId}`);
+      return null;
+    }
+
+    const buffer = decodeBase64UrlToBuffer(data);
+    const parsed = await pdfParse(buffer);
+    const text = (parsed.text ?? "").trim();
+    if (!text) return null;
+    return text.slice(0, MAX_PDF_TEXT_CHARS);
+  } catch (err) {
+    logCheck(`WARNING: failed to extract PDF ${filename} from ${messageId}: ${err}`);
+    return null;
+  }
+}
+
+async function fetchPdfAttachmentTexts(
+  auth: OAuth2Client,
+  messageId: string,
+  payload: any,
+): Promise<string[]> {
+  const pdfs = findPdfAttachments(payload).slice(0, MAX_PDF_ATTACHMENTS);
+  if (pdfs.length === 0) return [];
+
+  const texts: string[] = [];
+  for (const pdf of pdfs) {
+    const text = await downloadAndExtractPdf(auth, messageId, pdf.attachmentId, pdf.filename);
+    if (text) {
+      texts.push(`[Attachment: ${pdf.filename}]\n${text}`);
+    }
+  }
+  return texts;
 }
 
 // ── AI summarization ─────────────────────────────────────────────────────────
@@ -370,7 +470,10 @@ async function summarizeEmails(emails: NewEmail[]): Promise<string | null> {
   const emailDescriptions = emails.map((e, i) => {
     const sender = e.from.replace(/<[^>]+>/, "").trim() || e.from;
     const body = e.body ? `\nBody:\n${e.body.slice(0, 2000)}` : "";
-    return `Email ${i + 1}:\nFrom: ${sender}\nSubject: ${e.subject}\nSnippet: ${e.snippet}${body}`;
+    const attachments = e.attachmentTexts?.length
+      ? `\nPDF Attachments:\n${e.attachmentTexts.join("\n\n")}`
+      : "";
+    return `Email ${i + 1}:\nFrom: ${sender}\nSubject: ${e.subject}\nSnippet: ${e.snippet}${body}${attachments}`;
   }).join("\n\n---\n\n");
 
   try {
@@ -379,11 +482,12 @@ async function summarizeEmails(emails: NewEmail[]): Promise<string | null> {
       max_tokens: 1024,
       messages: [{
         role: "user",
-        content: `You are summarizing emails for a text message notification. For each email, write a concise summary starting with 📩.
+        content: `You are summarizing emails for a text message notification. For each email, write a concise summary starting with 📩. Some emails may include extracted text from PDF attachments — reference key details from attachments in your summary.
 
 Rules:
 - Write in lowercase, casual tone
 - For actionable emails, include: what it's about, who needs what, any deadlines, and how to respond
+- If PDF attachment content is included, mention key details from it (e.g. amounts, dates, action items)
 - For non-actionable emails (newsletters, FYIs, receipts), keep to one line ending with "— no action needed, just FYI"
 - Separate multiple emails with a blank line
 - Do NOT add any preamble or explanation, just the summaries
@@ -430,11 +534,13 @@ async function writeEmailNudge(
 ): Promise<void> {
   if (emails.length === 0) return;
 
-  // Fetch full bodies for notable emails (at most MAX_NUDGES_PER_CHECK = 3)
+  // Fetch full bodies and PDF attachments for notable emails (at most MAX_NUDGES_PER_CHECK = 3)
   for (const email of emails) {
     const auth = authMap.get(email.id);
     if (auth) {
-      email.body = await fetchEmailBody(auth, email.id);
+      const content = await fetchEmailContent(auth, email.id);
+      email.body = content.body;
+      email.attachmentTexts = content.attachmentTexts;
     }
   }
 
@@ -1079,12 +1185,14 @@ async function checkNewEmails(): Promise<void> {
     // Cap notifications to avoid spam
     const toNotify = notable.slice(0, MAX_NUDGES_PER_CHECK);
 
-    // Fetch bodies before actionability check (needed for AI classification)
+    // Fetch bodies and PDF attachments before actionability check
     for (const email of toNotify) {
       if (!email.body) {
         const auth = messageAuthMap.get(email.id);
         if (auth) {
-          email.body = await fetchEmailBody(auth, email.id);
+          const content = await fetchEmailContent(auth, email.id);
+          email.body = content.body;
+          email.attachmentTexts = content.attachmentTexts;
         }
       }
     }
