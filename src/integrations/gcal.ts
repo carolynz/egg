@@ -37,6 +37,19 @@ function getCalendarDir(): string {
   return join(EGG_MEMORY_DIR, "data", "calendar");
 }
 
+// ── Calendar list cache ─────────────────────────────────────────────────────
+
+// Calendars to skip — not used by the user
+const SKIPPED_CALENDARS = new Set(["RC Calendar"]);
+
+interface CachedCalendarList {
+  items: Array<{ id?: string | null; summary?: string | null }>;
+  fetchedAt: number;
+}
+
+const calendarListCache = new Map<string, CachedCalendarList>();
+const CALENDAR_LIST_CACHE_MS = 60 * 60 * 1000; // 1 hour
+
 // ── Fetch events for a single account ────────────────────────────────────────
 
 async function fetchCalendarEvents(
@@ -46,12 +59,23 @@ async function fetchCalendarEvents(
 ): Promise<CalendarEvent[]> {
   const cal = google.calendar({ version: "v3", auth });
 
-  // List all calendars the user has access to (including hidden/restricted)
-  const calListRes = await cal.calendarList.list({
-    showHidden: true,
-    minAccessRole: "reader",
-  });
-  const calendars = calListRes.data.items ?? [];
+  // Use cached calendar list if available and fresh (< 1 hour old)
+  const cacheKey = `${auth.credentials.access_token ?? "default"}`;
+  const cached = calendarListCache.get(cacheKey);
+  let calendars: Array<{ id?: string | null; summary?: string | null }>;
+
+  if (cached && Date.now() - cached.fetchedAt < CALENDAR_LIST_CACHE_MS) {
+    calendars = cached.items;
+    logGoogle("Calendar list: using cached result");
+  } else {
+    const calListRes = await cal.calendarList.list({
+      showHidden: true,
+      minAccessRole: "reader",
+    });
+    calendars = calListRes.data.items ?? [];
+    calendarListCache.set(cacheKey, { items: calendars, fetchedAt: Date.now() });
+    logGoogle(`Calendar list: fetched ${calendars.length} calendars (cached for 1h)`);
+  }
 
   const allEvents: CalendarEvent[] = [];
 
@@ -59,6 +83,12 @@ async function fetchCalendarEvents(
     const calId = calEntry.id;
     const calName = calEntry.summary ?? calId ?? "Unknown";
     if (!calId) continue;
+
+    // Skip calendars the user doesn't use
+    if (SKIPPED_CALENDARS.has(calName)) {
+      logGoogle(`Calendar: skipping "${calName}"`);
+      continue;
+    }
 
     let pageToken: string | undefined;
     do {
