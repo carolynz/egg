@@ -5,14 +5,14 @@ import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
 import Anthropic from "@anthropic-ai/sdk";
 // @ts-ignore — pdf-parse has no type declarations
-import pdfParse from "pdf-parse";
+import { PDFParse } from "pdf-parse";
 import {
   getGoogleOAuthConfig,
   loadAllAccounts,
   getAuthedClient,
   logGoogle,
 } from "./google.js";
-import { EGG_MEMORY_DIR, EMAIL_CHECK_INTERVAL_MS, NUDGES_DIR } from "../config.js";
+import { EGG_MEMORY_DIR, NUDGES_DIR } from "../config.js";
 import { EMAIL_CHECK_LOG } from "../logger.js";
 import { recordTokenUsage } from "../token-tracker.js";
 
@@ -433,7 +433,8 @@ async function downloadAndExtractPdf(
     }
 
     const buffer = decodeBase64UrlToBuffer(data);
-    const parsed = await pdfParse(buffer);
+    const parser = new PDFParse({ data: buffer });
+    const parsed = await parser.getText();
     const text = (parsed.text ?? "").trim();
     if (!text) return null;
     return text.slice(0, MAX_PDF_TEXT_CHARS);
@@ -1039,7 +1040,7 @@ function writeSentRecentFile(sentEmails: SentEmailSummary[]): void {
 
 // ── Main check function ──────────────────────────────────────────────────────
 
-async function checkNewEmails(): Promise<void> {
+export async function checkNewEmails(): Promise<void> {
   const config = getGoogleOAuthConfig();
   if (!config) return;
 
@@ -1249,48 +1250,3 @@ async function checkNewEmails(): Promise<void> {
   }
 }
 
-// ── Poller ────────────────────────────────────────────────────────────────────
-
-function hasGoogleCredentials(): boolean {
-  const config = getGoogleOAuthConfig();
-  if (!config) return false;
-  const accounts = loadAllAccounts();
-  return accounts.length > 0;
-}
-
-export class EmailCheckPoller {
-  private intervalId: NodeJS.Timeout | null = null;
-  private readonly hasCredentials: boolean;
-
-  constructor() {
-    this.hasCredentials = hasGoogleCredentials();
-  }
-
-  start(): void {
-    if (!this.hasCredentials) {
-      logCheck("No Google credentials found — fast email check disabled");
-      return;
-    }
-
-    const intervalSec = Math.round(EMAIL_CHECK_INTERVAL_MS / 1000);
-    logCheck(`Email check poller starting (every ${intervalSec}s)`);
-    // First run after 5 minutes (let other systems initialize, stagger after Google ingest at 3min)
-    setTimeout(() => void this.poll(), 5 * 60_000);
-    this.intervalId = setInterval(() => void this.poll(), EMAIL_CHECK_INTERVAL_MS);
-  }
-
-  stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
-  }
-
-  private async poll(): Promise<void> {
-    try {
-      await checkNewEmails();
-    } catch (err) {
-      logCheck(`ERROR in email check: ${err}`);
-    }
-  }
-}

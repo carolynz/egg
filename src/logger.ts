@@ -10,6 +10,8 @@ export const IMESSAGE_INGEST_LOG = join(EGG_LOG_DIR, "imessage-ingest.log");
 export const GOOGLE_INGEST_LOG = join(EGG_LOG_DIR, "google-ingest.log");
 export const PHOTOS_INGEST_LOG = join(EGG_LOG_DIR, "photos-ingest.log");
 export const EMAIL_CHECK_LOG = join(EGG_LOG_DIR, "email-check.log");
+export const EMAIL_POLLER_LOG = join(EGG_LOG_DIR, "email-poller.log");
+export const CALENDAR_POLLER_LOG = join(EGG_LOG_DIR, "calendar-poller.log");
 
 function ensureLogDir(): void {
   mkdirSync(EGG_LOG_DIR, { recursive: true });
