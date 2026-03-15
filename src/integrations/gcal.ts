@@ -251,10 +251,13 @@ export async function intakeCalendar(): Promise<void> {
   const sixMonthsAgo = new Date(now);
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  const timeMin = sixMonthsAgo.toISOString();
-  const timeMax = now.toISOString();
+  const fourteenDaysFromNow = new Date(now);
+  fourteenDaysFromNow.setDate(fourteenDaysFromNow.getDate() + 14);
 
-  logGoogle(`Calendar intake: ${sixMonthsAgo.toISOString().slice(0, 10)} → ${now.toISOString().slice(0, 10)}`);
+  const timeMin = sixMonthsAgo.toISOString();
+  const timeMax = fourteenDaysFromNow.toISOString();
+
+  logGoogle(`Calendar intake: ${sixMonthsAgo.toISOString().slice(0, 10)} → ${fourteenDaysFromNow.toISOString().slice(0, 10)}`);
 
   for (const account of accounts) {
     logGoogle(`Fetching calendar events for ${account.email}...`);
