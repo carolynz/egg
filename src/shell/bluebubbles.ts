@@ -108,6 +108,19 @@ export class BlueBubblesClient {
     return resp !== null;
   }
 
+  async sendTextTo(phone: string, text: string): Promise<boolean> {
+    if (!this.available) return false;
+    const chatGuid = `iMessage;-;${phone}`;
+    const method = this.privateApi ? "private-api" : "apple-script";
+    const resp = await this.post("/api/v1/message/text", {
+      chatGuid,
+      message: text,
+      method,
+      tempGuid: `temp-${randomUUID()}`,
+    });
+    return resp !== null;
+  }
+
   async startTyping(): Promise<void> {
     if (!this.available || !this.privateApi || !this.chatGuid) return;
     await this.post(`/api/v1/chat/${this.chatGuidEncoded}/typing`, {

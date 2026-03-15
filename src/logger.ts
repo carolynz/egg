@@ -12,6 +12,7 @@ export const PHOTOS_INGEST_LOG = join(EGG_LOG_DIR, "photos-ingest.log");
 export const EMAIL_CHECK_LOG = join(EGG_LOG_DIR, "email-check.log");
 export const EMAIL_POLLER_LOG = join(EGG_LOG_DIR, "email-poller.log");
 export const CALENDAR_POLLER_LOG = join(EGG_LOG_DIR, "calendar-poller.log");
+export const OUTBOUND_LOG = join(EGG_LOG_DIR, "outbound.log");
 
 function ensureLogDir(): void {
   mkdirSync(EGG_LOG_DIR, { recursive: true });
@@ -68,4 +69,10 @@ export function logTaskEnd(
 
 export function logApiSpend(summary: string): void {
   appendLog(TASKS_LOG, summary);
+}
+
+export function logOutbound(contact: string, message: string, success: boolean): void {
+  const status = success ? "OK" : "FAIL";
+  const preview = message.slice(0, 200).replace(/\n/g, " ");
+  appendLog(OUTBOUND_LOG, `${status} | to=${contact} | ${preview}`);
 }
