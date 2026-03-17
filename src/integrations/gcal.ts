@@ -231,6 +231,70 @@ function writeCalendarData(account: string, events: CalendarEvent[]): void {
   logGoogle(`Calendar: wrote ${events.length} events across ${finalDates.length} days for ${account}`);
 }
 
+// ── Create calendar event ────────────────────────────────────────────────────
+
+export interface CreateEventInput {
+  title: string;
+  start: string;        // ISO datetime (e.g. "2026-03-17T14:00:00-04:00")
+  end: string;          // ISO datetime
+  location?: string;
+  description?: string;
+}
+
+export interface CreateEventResult {
+  eventId: string;
+  link: string;
+}
+
+export async function createCalendarEvent(
+  account: string,
+  calendarId: string = "primary",
+  event: CreateEventInput,
+): Promise<CreateEventResult> {
+  const config = getGoogleOAuthConfig();
+  if (!config) throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
+
+  const accounts = loadAllAccounts();
+  const acct = accounts.find((a) => a.email === account);
+  if (!acct) throw new Error(`No Google account found for ${account}. Run \`egg google:auth\` first.`);
+
+  const auth = await getAuthedClient(config, acct);
+  const cal = google.calendar({ version: "v3", auth });
+
+  const res = await cal.events.insert({
+    calendarId,
+    requestBody: {
+      summary: event.title,
+      location: event.location,
+      description: event.description,
+      start: { dateTime: event.start },
+      end: { dateTime: event.end },
+    },
+  });
+
+  const eventId = res.data.id ?? "";
+  const link = res.data.htmlLink ?? "";
+
+  logGoogle(`Created event "${event.title}" (${eventId}) on ${calendarId} for ${account}`);
+
+  // Update local calendar JSON immediately so the next brain call sees it
+  const newEvent: CalendarEvent = {
+    id: eventId,
+    title: event.title,
+    start: event.start,
+    end: event.end,
+    allDay: false,
+    location: event.location ?? null,
+    description: event.description ?? null,
+    attendees: [],
+    calendar: calendarId === "primary" ? "Primary" : calendarId,
+    status: "confirmed",
+  };
+  writeCalendarData(account, [newEvent]);
+
+  return { eventId, link };
+}
+
 // ── Main intake function ─────────────────────────────────────────────────────
 
 export async function intakeCalendar(): Promise<void> {

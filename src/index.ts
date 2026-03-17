@@ -7,7 +7,7 @@ import { senseDaily, senseImessage, generateTodayMd } from "./senses/index.js";
 import { runOnboard } from "./commands/onboard.js";
 import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
-import { intakeCalendar } from "./integrations/gcal.js";
+import { intakeCalendar, createCalendarEvent } from "./integrations/gcal.js";
 import { intakeGmail } from "./integrations/gmail.js";
 import {
   EGG_MEMORY_DIR,
@@ -194,6 +194,42 @@ intake
   .description("Pull 6 months of Gmail metadata into egg-memory")
   .action(async () => {
     await intakeGmail();
+  });
+
+// ── calendar:create ──
+program
+  .command("calendar:create")
+  .description("Create a Google Calendar event")
+  .requiredOption("--title <title>", "Event title")
+  .requiredOption("--start <datetime>", "Start time (ISO datetime)")
+  .requiredOption("--end <datetime>", "End time (ISO datetime)")
+  .option("--account <email>", "Google account email", "kelin@poetry.camera")
+  .option("--calendar <id>", "Calendar ID", "primary")
+  .option("--location <location>", "Event location")
+  .option("--description <description>", "Event description")
+  .action(async (opts: {
+    title: string;
+    start: string;
+    end: string;
+    account: string;
+    calendar: string;
+    location?: string;
+    description?: string;
+  }) => {
+    try {
+      const result = await createCalendarEvent(opts.account, opts.calendar, {
+        title: opts.title,
+        start: opts.start,
+        end: opts.end,
+        location: opts.location,
+        description: opts.description,
+      });
+      console.log(`Event created: ${result.eventId}`);
+      console.log(`Link: ${result.link}`);
+    } catch (err) {
+      console.error("[calendar:create] Failed:", err);
+      process.exit(1);
+    }
   });
 
 // ── onboard ──
