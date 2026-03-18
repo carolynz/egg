@@ -1,0 +1,153 @@
+{
+  "categories": ["founder", "athlete", "manifestation"],
+  "preference_notes": "Start with a range across all categories. User will give feedback to adjust mix.",
+  "videos": [
+    {
+      "url": "https://www.youtube.com/watch?v=ZoqgAy3h4OM",
+      "title": "How to Get and Stay Motivated - Sam Altman (YC)",
+      "category": "founder",
+      "duration_min": 6,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=CBYhVcO4WgI",
+      "title": "How to Build the Future - Sam Altman interviews Mark Zuckerberg",
+      "category": "founder",
+      "duration_min": 8,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=ii1jcLg-eIQ",
+      "title": "How to Find Product Market Fit - Michael Seibel (YC)",
+      "category": "founder",
+      "duration_min": 7,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=0lJKucu6HJc",
+      "title": "Advice for Ambitious 19 Year Olds - Sam Altman",
+      "category": "founder",
+      "duration_min": 4,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=F4K0bKBUuJQ",
+      "title": "Steve Jobs Product Launch Compilation - Think Different",
+      "category": "founder",
+      "duration_min": 8,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=vmG9jzCHtSQ",
+      "title": "Startup Ideas and the Billion Dollar Company - Paul Graham",
+      "category": "founder",
+      "duration_min": 6,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=D73mm29XXAw",
+      "title": "How One Decision Can Change Your Life - Brian Chesky (Airbnb)",
+      "category": "founder",
+      "duration_min": 5,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=JY3dGFDdwPg",
+      "title": "Kobe Bryant on Mamba Mentality and Work Ethic",
+      "category": "athlete",
+      "duration_min": 7,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=mgmVOuLgFB0",
+      "title": "David Goggins - Who's Gonna Carry the Boats",
+      "category": "athlete",
+      "duration_min": 5,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=TLKxdTmk-zc",
+      "title": "Michael Jordan - Failure is the Key to Success",
+      "category": "athlete",
+      "duration_min": 3,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=5tSTk1083VY",
+      "title": "Arnold Schwarzenegger - 6 Rules of Success",
+      "category": "athlete",
+      "duration_min": 8,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=26U_seo0a1g",
+      "title": "Navy SEAL Jocko Willink - Discipline Equals Freedom",
+      "category": "athlete",
+      "duration_min": 6,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=9z2eoTSZbEQ",
+      "title": "The Science of Visualization and Mental Rehearsal",
+      "category": "manifestation",
+      "duration_min": 8,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=vLSOnBtSeTI",
+      "title": "Dr. Joe Dispenza - Break the Habit of Being Yourself",
+      "category": "manifestation",
+      "duration_min": 10,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=EKy19aAo-CE",
+      "title": "Wayne Dyer - Change Your Thoughts, Change Your Life",
+      "category": "manifestation",
+      "duration_min": 9,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=lFv1gMEFdUY",
+      "title": "The Power of Your Subconscious Mind - Morning Visualization",
+      "category": "manifestation",
+      "duration_min": 7,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=MmfikLimeQ8",
+      "title": "Alan Watts - Stop Doubting Yourself",
+      "category": "manifestation",
+      "duration_min": 5,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=nkGiFpJC9LM",
+      "title": "How to Launch a Startup in 10 Minutes - YC Demo Day Highlights",
+      "category": "founder",
+      "duration_min": 10,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=3PVpG1F6kWs",
+      "title": "Conor McGregor on Belief, Vision, and Manifesting Success",
+      "category": "athlete",
+      "duration_min": 4,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=6ru4lGhQWEY",
+      "title": "Muhammad Ali - Impossible is Nothing",
+      "category": "athlete",
+      "duration_min": 5,
+      "times_sent": 0
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=IdTMDpizis8",
+      "title": "Elon Musk - Work Like Hell and Believe in Your Mission",
+      "category": "founder",
+      "duration_min": 6,
+      "times_sent": 0
+    }
+  ]
+}

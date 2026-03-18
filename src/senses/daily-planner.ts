@@ -11,6 +11,7 @@ import { join } from "path";
 import { EGG_MEMORY_DIR } from "../config.js";
 import { callBrain } from "../brain/index.js";
 import { loadGoalProgress, updateWeekStart, GoalProgress } from "./goal-progress.js";
+import { pickMotivationVideo, formatVideoForNudge } from "./motivation-videos.js";
 
 // ── Data readers ────────────────────────────────────────────────────────────
 
@@ -284,6 +285,10 @@ export async function generateMorningNudge(): Promise<string> {
   const sleepData = readSleepData();
   const goalProgress = formatGoalProgress(loadGoalProgress());
 
+  // Pick a motivation video for today's nudge
+  const video = pickMotivationVideo();
+  const videoLine = video ? formatVideoForNudge(video) : "";
+
   const prompt = [
     "Write a concise morning nudge message (3-5 text messages, one per line).",
     "",
@@ -297,6 +302,7 @@ export async function generateMorningNudge(): Promise<string> {
     "- Start with a brief greeting appropriate to the time/context, not generic 'good morning'",
     "- Don't repeat the entire today.md — just the highlights",
     "- If goal progress is behind, mention it naturally",
+    "- Include the motivation video as a final message — just the title and URL, no extra commentary",
     "",
     "## Today's plan",
     todayContent,
@@ -306,6 +312,9 @@ export async function generateMorningNudge(): Promise<string> {
     "",
     "## Sleep data",
     sleepData || "No sleep data available.",
+    "",
+    "## Morning motivation video",
+    videoLine || "No video available today.",
   ].join("\n");
 
   const nudge = await callBrain({ history: [], message: prompt });
