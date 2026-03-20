@@ -170,9 +170,19 @@ function formatGoalProgress(progress: GoalProgress): string {
 
 // ── Main generation ─────────────────────────────────────────────────────────
 
-export async function generateTodayMd(): Promise<string> {
+export async function generateTodayMd(force = false): Promise<string> {
   const today = getTodayDate();
   const dayOfWeek = getDayOfWeek();
+
+  // Guard: skip if today.md already has the current date header
+  const todayPath = join(EGG_MEMORY_DIR, "today.md");
+  if (!force && existsSync(todayPath)) {
+    const existing = readFileSync(todayPath, "utf-8");
+    if (existing.includes(`# Today — ${today}`)) {
+      console.log(`[planner] today.md already current for ${today} — skipping generation`);
+      return existing;
+    }
+  }
 
   // Ensure goal progress week is current
   updateWeekStart();
@@ -253,7 +263,6 @@ export async function generateTodayMd(): Promise<string> {
   const result = await callBrain({ history: [], message: prompt });
 
   // Write today.md
-  const todayPath = join(EGG_MEMORY_DIR, "today.md");
   writeFileSync(todayPath, result);
   console.log(`[planner] wrote ${todayPath} (${result.length} chars)`);
 
