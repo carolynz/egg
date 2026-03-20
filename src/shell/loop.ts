@@ -28,6 +28,8 @@ import { join, extname } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import Anthropic from "@anthropic-ai/sdk";
+// @ts-ignore — pdf-parse has no type declarations
+import { PDFParse } from "pdf-parse";
 
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
@@ -160,17 +162,129 @@ async function captionImage(filepath: string): Promise<string> {
   }
 }
 
+/** Max chars of extracted text to include inline in the prompt. */
+const ATTACHMENT_TEXT_LIMIT = 20_000;
+
+/** MIME types (and prefixes) treated as readable text files. */
+const TEXT_MIME_PREFIXES = ["text/"];
+const TEXT_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/typescript",
+  "application/x-yaml",
+  "application/x-sh",
+  "application/csv",
+  "application/xhtml+xml",
+  "application/sql",
+]);
+/** File extensions treated as text even when MIME type is application/octet-stream. */
+const TEXT_EXTENSIONS = new Set([
+  ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml",
+  ".xml", ".html", ".htm", ".css", ".js", ".ts", ".jsx", ".tsx",
+  ".py", ".rb", ".sh", ".bash", ".zsh", ".c", ".cpp", ".h", ".hpp",
+  ".java", ".go", ".rs", ".swift", ".kt", ".sql", ".toml", ".ini",
+  ".cfg", ".conf", ".log", ".env", ".gitignore", ".dockerfile",
+]);
+
+function isTextMime(mimeType: string, filename: string): boolean {
+  const mime = mimeType.toLowerCase();
+  if (TEXT_MIME_TYPES.has(mime)) return true;
+  if (TEXT_MIME_PREFIXES.some((p) => mime.startsWith(p))) return true;
+  // Fall back to extension check for octet-stream or unknown MIME types
+  const ext = extname(filename).toLowerCase();
+  if (TEXT_EXTENSIONS.has(ext)) return true;
+  return false;
+}
+
+async function extractPdfText(filepath: string): Promise<string | null> {
+  console.log("[attach] extracting text from PDF:", filepath);
+  if (!existsSync(filepath)) {
+    console.error(`[attach] PDF file does not exist: ${filepath}`);
+    return null;
+  }
+  try {
+    const buffer = readFileSync(filepath);
+    const parser = new PDFParse({ data: buffer });
+    const parsed = await parser.getText();
+    const text = (parsed.text ?? "").trim();
+    if (!text) {
+      console.warn("[attach] PDF extraction returned empty text");
+      return null;
+    }
+    console.log(`[attach] extracted ${text.length} chars from PDF`);
+    return text;
+  } catch (err) {
+    console.error("[attach] PDF text extraction failed:", err);
+    return null;
+  }
+}
+
+function readTextAttachment(filepath: string): string | null {
+  if (!existsSync(filepath)) return null;
+  try {
+    const stat = statSync(filepath);
+    // Skip files larger than 1MB to avoid memory issues
+    if (stat.size > 1_000_000) {
+      console.warn(`[attach] text file too large (${stat.size} bytes), skipping inline read: ${filepath}`);
+      return null;
+    }
+    const content = readFileSync(filepath, "utf-8").trim();
+    if (!content) return null;
+    console.log(`[attach] read ${content.length} chars from text file: ${filepath}`);
+    return content;
+  } catch (err) {
+    console.error(`[attach] failed to read text file ${filepath}:`, err);
+    return null;
+  }
+}
+
+function truncateText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return text.slice(0, limit) + "\n… [truncated]";
+}
+
 async function processAttachments(attachments: Attachment[]): Promise<string[]> {
   console.log(`[attach] processing ${attachments.length} attachment(s) for message`);
   const captions: string[] = [];
   for (const att of attachments) {
-    if (IMAGE_MIME_TYPES.has(att.mimeType.toLowerCase())) {
+    const mime = att.mimeType.toLowerCase();
+
+    if (IMAGE_MIME_TYPES.has(mime)) {
+      // Images: caption via Anthropic API + include file path for brain's Read tool
       const caption = await captionImage(att.filename);
-      captions.push(`[image: ${caption}]`);
+      captions.push(`[image: ${caption}]\n[file: ${att.filename}]`);
       console.log(`[attach] ${att.filename} → image (caption: "${caption}")`);
+
+    } else if (mime === "application/pdf") {
+      // PDFs: extract text content inline
+      const pdfText = await extractPdfText(att.filename);
+      if (pdfText) {
+        const truncated = truncateText(pdfText, ATTACHMENT_TEXT_LIMIT);
+        captions.push(`[PDF: ${att.filename}]\n--- PDF content ---\n${truncated}\n--- end PDF ---`);
+        console.log(`[attach] ${att.filename} → PDF (${pdfText.length} chars extracted)`);
+      } else {
+        // Extraction failed — pass path so brain can try reading it
+        captions.push(`[PDF: ${att.filename}] (text extraction failed — file available at path for reading)`);
+        console.warn(`[attach] ${att.filename} → PDF extraction failed, passing path`);
+      }
+
+    } else if (isTextMime(mime, att.filename)) {
+      // Text-like files: read content inline
+      const content = readTextAttachment(att.filename);
+      if (content) {
+        const truncated = truncateText(content, ATTACHMENT_TEXT_LIMIT);
+        captions.push(`[file: ${att.filename} (${mime})]\n--- file content ---\n${truncated}\n--- end file ---`);
+        console.log(`[attach] ${att.filename} → text file (${content.length} chars)`);
+      } else {
+        captions.push(`[file: ${att.filename} (${mime})] (could not read content)`);
+        console.warn(`[attach] ${att.filename} → text file read failed`);
+      }
+
     } else {
-      captions.push(`[attachment: ${att.mimeType}]`);
-      console.warn(`[attach] ${att.filename} → skipped (not image: ${att.mimeType})`);
+      // Other binary files: note type and pass path
+      captions.push(`[attachment: ${mime}] [file: ${att.filename}]`);
+      console.warn(`[attach] ${att.filename} → binary attachment (${mime}), passing path`);
     }
   }
   return captions;
