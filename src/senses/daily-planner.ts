@@ -274,6 +274,15 @@ export async function generateTodayMd(force = false): Promise<string> {
  * Returns the nudge text (to be written to nudges/).
  */
 export async function generateMorningNudge(): Promise<string> {
+  // Only generate nudges during the valid morning window (5am–1pm).
+  // If today.md is generated outside this window (e.g., evening before),
+  // the nudge should fire from normal morning triggers instead.
+  const hour = new Date().getHours();
+  if (hour < 5 || hour >= 13) {
+    console.log(`[planner] outside morning window (${hour}:00) — skipping nudge generation`);
+    return "";
+  }
+
   const today = getTodayDate();
   const todayPath = join(EGG_MEMORY_DIR, "today.md");
 

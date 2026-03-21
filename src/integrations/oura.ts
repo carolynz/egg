@@ -305,7 +305,14 @@ export function hasMorningNudgeToday(todayDate: string): boolean {
  */
 export async function triggerMorningNudge(source: string): Promise<boolean> {
   const now = new Date();
+  const hour = now.getHours();
   const todayDate = now.toISOString().slice(0, 10);
+
+  // Only trigger during the valid morning window (5am–1pm)
+  if (hour < 5 || hour >= 13) {
+    logOura(`Outside morning window (${hour}:00) — skipping nudge (source: ${source})`);
+    return false;
+  }
 
   // Dedup: check nudges/sent/ for today's date before writing
   if (hasMorningNudgeToday(todayDate)) {
