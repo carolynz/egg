@@ -321,6 +321,7 @@ export async function generateMorningNudge(): Promise<string> {
     "- Don't repeat the entire today.md — just the highlights",
     "- If goal progress is behind, mention it naturally",
     "- Include the motivation video as a final message — just the title and URL, no extra commentary",
+    "- IMPORTANT: Include a morning creation window reminder — cortisol awakening response means peak alertness right now. Prompt them to create one piece of content before consuming any feed. Keep the bar low: 'morning creation window is open. make something before you consume anything — even a photo + 2 sentences on IG counts.' Weave this naturally into the nudge, don't make it feel like a separate notification.",
     "",
     "## Today's plan",
     todayContent,

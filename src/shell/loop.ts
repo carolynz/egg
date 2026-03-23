@@ -13,6 +13,7 @@ import { EmailPoller } from "../integrations/email-poller.js";
 import { CalendarPoller } from "../integrations/calendar-poller.js";
 import { PhotosIngestPoller } from "../senses/photos-ingest.js";
 import { detectWorkoutCompletion, scheduleBraveryNudge } from "../senses/bravery-window.js";
+import { scheduleBedrimeRehearsalNudge } from "../senses/bedtime-rehearsal.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -306,6 +307,7 @@ export class ShellLoop {
   private userPhoneNorm: string;
   private running = false;
   private lastDailySummaryDate: string = loadTokenState().lastSentDate;
+  private lastBedtimeRehearsalDate: string = "";
 
   constructor(bbOnly: boolean) {
     this.bb = new BlueBubblesClient();
@@ -799,6 +801,19 @@ export class ShellLoop {
     return success;
   }
 
+  private async checkBedtimeRehearsal(): Promise<void> {
+    const hour = new Date().getHours();
+    if (hour !== 22) return; // trigger at 10pm local
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.lastBedtimeRehearsalDate === today) return;
+
+    this.lastBedtimeRehearsalDate = today;
+    console.log("[bedtime] 10pm — scheduling bedtime rehearsal nudge");
+    scheduleBedrimeRehearsalNudge().catch((err) =>
+      console.error("[bedtime] failed to schedule bedtime rehearsal nudge:", err),
+    );
+  }
+
   private async checkDailySummary(): Promise<void> {
     if (getPacificHour() !== 23) return;
     const today = getPacificDate();
@@ -851,6 +866,7 @@ export class ShellLoop {
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {
       try {
+        await this.checkBedtimeRehearsal();
         await this.checkDailySummary();
         await this.pollOnce();
       } catch (err) {
