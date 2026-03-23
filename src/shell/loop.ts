@@ -12,6 +12,7 @@ import { ImessageIngestPoller } from "../senses/imessage-ingest.js";
 import { EmailPoller } from "../integrations/email-poller.js";
 import { CalendarPoller } from "../integrations/calendar-poller.js";
 import { PhotosIngestPoller } from "../senses/photos-ingest.js";
+import { detectWorkoutCompletion, scheduleBraveryNudge } from "../senses/bravery-window.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -785,6 +786,15 @@ export class ShellLoop {
     this.state.history.push({ role: "assistant", content: reply });
     this.state.pendingMessage = null;
     this.persist();
+
+    // 11. Check for workout completion → trigger bravery window nudge
+    if (detectWorkoutCompletion(combinedText)) {
+      console.log("[bravery] workout completion detected — scheduling bravery window nudge");
+      // Run async without blocking the poll loop
+      scheduleBraveryNudge().catch((err) =>
+        console.error("[bravery] failed to schedule bravery nudge:", err),
+      );
+    }
 
     return success;
   }
