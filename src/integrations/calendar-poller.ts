@@ -26,7 +26,9 @@ function hasGoogleCredentials(): boolean {
 
 export class CalendarPoller {
   private intervalId: NodeJS.Timeout | null = null;
+  private startupTimeoutId: NodeJS.Timeout | null = null;
   private readonly hasCredentials: boolean;
+  private ingestRunning = false;
 
   constructor() {
     this.hasCredentials = hasGoogleCredentials();
@@ -40,25 +42,43 @@ export class CalendarPoller {
 
     const intervalMin = Math.round(CALENDAR_POLL_INTERVAL_MS / 60_000);
     logCalendar(`Calendar poller starting (every ${intervalMin} minutes)`);
-    // First run after 4 minutes (staggered after email poller at 3min)
-    setTimeout(() => void this.poll(), 4 * 60_000);
-    this.intervalId = setInterval(() => void this.poll(), CALENDAR_POLL_INTERVAL_MS);
+    // First run after 4 minutes (staggered after email poller at 3min).
+    // Interval starts only after startup poll completes to avoid overlap.
+    this.startupTimeoutId = setTimeout(() => void this.startupPoll(), 4 * 60_000);
   }
 
   stop(): void {
+    if (this.startupTimeoutId) {
+      clearTimeout(this.startupTimeoutId);
+      this.startupTimeoutId = null;
+    }
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
   }
 
+  private async startupPoll(): Promise<void> {
+    this.startupTimeoutId = null;
+    await this.poll();
+    this.intervalId = setInterval(() => void this.poll(), CALENDAR_POLL_INTERVAL_MS);
+  }
+
   private async poll(): Promise<void> {
+    if (this.ingestRunning) {
+      logCalendar("Skipping Calendar ingest — already running");
+      return;
+    }
+
+    this.ingestRunning = true;
     logCalendar("Starting Calendar ingest...");
     try {
       await intakeCalendar();
       logCalendar("Calendar ingest complete");
     } catch (err) {
       logCalendar(`ERROR in Calendar ingest: ${err}`);
+    } finally {
+      this.ingestRunning = false;
     }
   }
 }

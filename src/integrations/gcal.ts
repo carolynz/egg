@@ -300,14 +300,12 @@ export async function createCalendarEvent(
 export async function intakeCalendar(): Promise<void> {
   const config = getGoogleOAuthConfig();
   if (!config) {
-    console.error("[gcal] No Google OAuth config found. Run `egg google:auth` first.");
-    process.exit(1);
+    throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
   }
 
   const accounts = loadAllAccounts();
   if (accounts.length === 0) {
-    console.error("[gcal] No Google accounts configured. Run `egg google:auth` first.");
-    process.exit(1);
+    throw new Error("No Google accounts configured. Run `egg google:auth` first.");
   }
 
   // 6 months back from now

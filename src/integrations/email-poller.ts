@@ -27,8 +27,10 @@ function hasGoogleCredentials(): boolean {
 
 export class EmailPoller {
   private intervalId: NodeJS.Timeout | null = null;
+  private startupTimeoutId: NodeJS.Timeout | null = null;
   private readonly hasCredentials: boolean;
   private lastFullIngestDate: string | null = null;
+  private fullIngestRunning = false;
 
   constructor() {
     this.hasCredentials = hasGoogleCredentials();
@@ -42,49 +44,61 @@ export class EmailPoller {
 
     const intervalMin = Math.round(EMAIL_POLL_INTERVAL_MS / 60_000);
     logEmail(`Email poller starting (every ${intervalMin} minutes)`);
-    // First run after 3 minutes (let other systems initialize)
-    // Startup run does a full ingest + incremental check
-    setTimeout(() => void this.startupPoll(), 3 * 60_000);
-    this.intervalId = setInterval(() => void this.poll(), EMAIL_POLL_INTERVAL_MS);
+    // Full ingest on startup after 3 minutes (let other systems initialize).
+    // Incremental polling starts only after the startup ingest finishes,
+    // so we don't race the interval against the startup ingest.
+    this.startupTimeoutId = setTimeout(() => void this.startupPoll(), 3 * 60_000);
   }
 
   stop(): void {
+    if (this.startupTimeoutId) {
+      clearTimeout(this.startupTimeoutId);
+      this.startupTimeoutId = null;
+    }
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
   }
 
-  /** Full ingest on startup, then incremental check. */
+  /** Full ingest on startup, then start the regular poll interval. */
   private async startupPoll(): Promise<void> {
-    logEmail("Starting full Gmail ingest (startup)...");
-    try {
-      await intakeGmail();
-      this.lastFullIngestDate = new Date().toISOString().slice(0, 10);
-      logEmail("Full Gmail ingest complete (startup)");
-    } catch (err) {
-      logEmail(`ERROR in Gmail ingest (startup): ${err}`);
+    this.startupTimeoutId = null;
+    await this.runFullIngest("startup");
+    await this.incrementalCheck();
+
+    // Now start the regular interval — no overlap with startup ingest.
+    this.intervalId = setInterval(() => void this.poll(), EMAIL_POLL_INTERVAL_MS);
+  }
+
+  /** Regular poll: incremental check, plus full ingest once per day. */
+  private async poll(): Promise<void> {
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.lastFullIngestDate !== today) {
+      await this.runFullIngest("daily");
     }
 
     await this.incrementalCheck();
   }
 
-  /** Regular poll: incremental check only. Run full ingest once per day. */
-  private async poll(): Promise<void> {
-    // Run full ingest once per day (if we haven't already today)
-    const today = new Date().toISOString().slice(0, 10);
-    if (this.lastFullIngestDate !== today) {
-      logEmail("Starting daily full Gmail ingest...");
-      try {
-        await intakeGmail();
-        this.lastFullIngestDate = today;
-        logEmail("Daily full Gmail ingest complete");
-      } catch (err) {
-        logEmail(`ERROR in daily Gmail ingest: ${err}`);
-      }
+  /** Run a full Gmail ingest with a concurrency guard. */
+  private async runFullIngest(reason: string): Promise<void> {
+    if (this.fullIngestRunning) {
+      logEmail(`Skipping ${reason} full Gmail ingest — already running`);
+      return;
     }
 
-    await this.incrementalCheck();
+    this.fullIngestRunning = true;
+    logEmail(`Starting ${reason} full Gmail ingest...`);
+    try {
+      await intakeGmail();
+      this.lastFullIngestDate = new Date().toISOString().slice(0, 10);
+      logEmail(`${reason} full Gmail ingest complete`);
+    } catch (err) {
+      logEmail(`ERROR in ${reason} full Gmail ingest: ${err}`);
+    } finally {
+      this.fullIngestRunning = false;
+    }
   }
 
   private async incrementalCheck(): Promise<void> {

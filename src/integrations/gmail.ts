@@ -340,14 +340,12 @@ function writeSentGmailData(account: string, emails: EmailMeta[]): void {
 export async function intakeGmail(): Promise<void> {
   const config = getGoogleOAuthConfig();
   if (!config) {
-    console.error("[gmail] No Google OAuth config found. Run `egg google:auth` first.");
-    process.exit(1);
+    throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
   }
 
   const accounts = loadAllAccounts();
   if (accounts.length === 0) {
-    console.error("[gmail] No Google accounts configured. Run `egg google:auth` first.");
-    process.exit(1);
+    throw new Error("No Google accounts configured. Run `egg google:auth` first.");
   }
 
   // 6 months back from now
