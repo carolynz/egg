@@ -26,7 +26,7 @@ function readFileSafe(path: string, maxChars = 8000): string {
 }
 
 function getTodayDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA");
 }
 
 function getDayOfWeek(): string {
@@ -138,7 +138,7 @@ function readSleepData(): string {
 
   // Check today's or yesterday's daily digest for sleep info
   const today = getTodayDate();
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toLocaleDateString("en-CA");
 
   for (const date of [today, yesterday]) {
     const digestPath = join(dailyDir, `${date}.md`);

@@ -209,8 +209,19 @@ function buildHeartbeatPrompt(context: string): string {
 function hasMorningNudgeSentToday(): boolean {
   try {
     if (!existsSync(NUDGES_SENT_DIR)) return false;
-    const todayDate = new Date().toISOString().slice(0, 10);
-    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => f.startsWith(todayDate) && f.endsWith(".md"));
+    const todayLocal = new Date().toLocaleDateString("en-CA");
+    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => {
+      if (!f.endsWith(".md")) return false;
+      // Exclude non-morning nudges (bedtime/bravery) from morning dedup
+      if (f.endsWith("-bedtime.md") || f.endsWith("-bravery.md")) return false;
+      // Filter by local date using file mtime, not UTC filename prefix
+      try {
+        const mtime = statSync(join(NUDGES_SENT_DIR, f)).mtime;
+        return mtime.toLocaleDateString("en-CA") === todayLocal;
+      } catch {
+        return false;
+      }
+    });
     return files.length > 0;
   } catch {
     return false;
@@ -224,8 +235,19 @@ function isTodayPlanCurrent(): boolean {
   const todayPath = join(EGG_MEMORY_DIR, "today.md");
   if (!existsSync(todayPath)) return false;
   const content = readFileSync(todayPath, "utf-8");
-  const today = new Date().toISOString().slice(0, 10);
-  return content.includes(today);
+  const today = new Date().toLocaleDateString("en-CA");
+  if (!content.includes(today)) return false;
+
+  // Force morning re-generation: if today.md was last modified before 7 AM
+  // local time today, regenerate to capture fresh calendar/email data
+  const now = new Date();
+  const sevenAm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+  if (now >= sevenAm) {
+    const mtime = statSync(todayPath).mtime;
+    if (mtime < sevenAm) return false;
+  }
+
+  return true;
 }
 
 /** Run morning planner: generate today.md + write morning nudge */

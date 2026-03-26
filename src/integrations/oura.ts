@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { createServer } from "http";
 import { execSync } from "child_process";
 import { homedir } from "os";
@@ -285,11 +285,21 @@ function buildOuraFollowUpMessage(data: {
 // ── Dedup helper ──────────────────────────────────────────────────────────────
 
 /** Check if a morning nudge was already sent today by scanning nudges/sent/ filenames */
-export function hasMorningNudgeToday(todayDate: string): boolean {
+export function hasMorningNudgeToday(todayLocalDate: string): boolean {
   try {
     if (!existsSync(NUDGES_SENT_DIR)) return false;
-    // Sent nudge files are named like 2026-03-12T08-30-00-000Z.md
-    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => f.startsWith(todayDate) && f.endsWith(".md"));
+    const files = readdirSync(NUDGES_SENT_DIR).filter((f) => {
+      if (!f.endsWith(".md")) return false;
+      // Exclude non-morning nudges (bedtime/bravery) from morning dedup
+      if (f.endsWith("-bedtime.md") || f.endsWith("-bravery.md")) return false;
+      // Filter by local date using file mtime, not UTC filename prefix
+      try {
+        const mtime = statSync(join(NUDGES_SENT_DIR, f)).mtime;
+        return mtime.toLocaleDateString("en-CA") === todayLocalDate;
+      } catch {
+        return false;
+      }
+    });
     return files.length > 0;
   } catch {
     return false;
@@ -306,7 +316,7 @@ export function hasMorningNudgeToday(todayDate: string): boolean {
 export async function triggerMorningNudge(source: string): Promise<boolean> {
   const now = new Date();
   const hour = now.getHours();
-  const todayDate = now.toISOString().slice(0, 10);
+  const todayDate = now.toLocaleDateString("en-CA");
 
   // Only trigger during the valid morning window (5am–1pm)
   if (hour < 5 || hour >= 13) {
@@ -356,7 +366,7 @@ async function checkWakeUp(token: string): Promise<void> {
   // Only check between 5am and 1pm (noon fallback needs to fire at 12)
   if (hour < 5 || hour >= 13) return;
 
-  const todayDate = now.toISOString().slice(0, 10);
+  const todayDate = now.toLocaleDateString("en-CA");
   const state = loadOuraState();
 
   if (state.lastNotifiedWakeDate === todayDate) return;
@@ -364,7 +374,7 @@ async function checkWakeUp(token: string): Promise<void> {
   // Fetch sessions from yesterday so we catch overnight sleep
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
-  const startDate = yesterday.toISOString().slice(0, 10);
+  const startDate = yesterday.toLocaleDateString("en-CA");
 
   let sessions: SleepSession[];
   try {
@@ -405,7 +415,7 @@ async function checkWakeUp(token: string): Promise<void> {
 
 async function checkOuraSync(token: string): Promise<void> {
   const now = new Date();
-  const todayDate = now.toISOString().slice(0, 10);
+  const todayDate = now.toLocaleDateString("en-CA");
   const state = loadOuraState();
 
   // Only run after morning nudge has been sent today
@@ -447,7 +457,7 @@ async function checkOuraSync(token: string): Promise<void> {
   let avgHrv: number | null = null;
   let avgHeartRate: number | null = null;
   try {
-    const sessions = await fetchSleepSessions(token, yesterday.toISOString().slice(0, 10));
+    const sessions = await fetchSleepSessions(token, yesterday.toLocaleDateString("en-CA"));
     const longSleep = sessions
       .filter((s) => s.type === "long_sleep" && s.bedtime_end != null)
       .sort((a, b) => new Date(b.bedtime_end!).getTime() - new Date(a.bedtime_end!).getTime())[0];
