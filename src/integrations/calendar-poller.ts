@@ -73,7 +73,7 @@ export class CalendarPoller {
     this.ingestRunning = true;
     logCalendar("Starting Calendar ingest...");
     try {
-      await intakeCalendar();
+      await intakeCalendar({ lookbackDays: 7 });
       logCalendar("Calendar ingest complete");
     } catch (err) {
       logCalendar(`ERROR in Calendar ingest: ${err}`);

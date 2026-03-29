@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "mercury": "tsx src/index.ts intake mercury",
     "test": "vitest"
   },
   "dependencies": {

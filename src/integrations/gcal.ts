@@ -297,7 +297,7 @@ export async function createCalendarEvent(
 
 // ── Main intake function ─────────────────────────────────────────────────────
 
-export async function intakeCalendar(): Promise<void> {
+export async function intakeCalendar(opts?: { lookbackDays?: number }): Promise<void> {
   const config = getGoogleOAuthConfig();
   if (!config) {
     throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
@@ -308,18 +308,18 @@ export async function intakeCalendar(): Promise<void> {
     throw new Error("No Google accounts configured. Run `egg google:auth` first.");
   }
 
-  // 6 months back from now
+  const lookbackDays = opts?.lookbackDays ?? 180; // default: ~6 months
   const now = new Date();
-  const sixMonthsAgo = new Date(now);
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const lookbackDate = new Date(now);
+  lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
   const fourteenDaysFromNow = new Date(now);
   fourteenDaysFromNow.setDate(fourteenDaysFromNow.getDate() + 14);
 
-  const timeMin = sixMonthsAgo.toISOString();
+  const timeMin = lookbackDate.toISOString();
   const timeMax = fourteenDaysFromNow.toISOString();
 
-  logGoogle(`Calendar intake: ${sixMonthsAgo.toISOString().slice(0, 10)} → ${fourteenDaysFromNow.toISOString().slice(0, 10)}`);
+  logGoogle(`Calendar intake: ${lookbackDate.toISOString().slice(0, 10)} → ${fourteenDaysFromNow.toISOString().slice(0, 10)}`);
 
   for (const account of accounts) {
     logGoogle(`Fetching calendar events for ${account.email}...`);

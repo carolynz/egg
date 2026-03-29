@@ -9,6 +9,7 @@ import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
 import { intakeCalendar, createCalendarEvent } from "./integrations/gcal.js";
 import { intakeGmail } from "./integrations/gmail.js";
+import { intakeMercury } from "./integrations/mercury.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -230,6 +231,14 @@ program
       console.error("[calendar:create] Failed:", err);
       process.exit(1);
     }
+  });
+
+// ── intake mercury ──
+intake
+  .command("mercury")
+  .description("Pull Mercury bank account balances and recent transactions")
+  .action(async () => {
+    await intakeMercury();
   });
 
 // ── onboard ──

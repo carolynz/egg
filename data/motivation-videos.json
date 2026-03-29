@@ -1,5 +1,9 @@
 {
-  "categories": ["founder", "athlete", "manifestation"],
+  "categories": [
+    "founder",
+    "athlete",
+    "manifestation"
+  ],
   "preference_notes": "Start with a range across all categories. User will give feedback to adjust mix.",
   "videos": [
     {
@@ -7,7 +11,7 @@
       "title": "How to Get and Stay Motivated - Sam Altman (YC)",
       "category": "founder",
       "duration_min": 6,
-      "times_sent": 0
+      "times_sent": 1
     },
     {
       "url": "https://www.youtube.com/watch?v=CBYhVcO4WgI",
@@ -56,7 +60,7 @@
       "title": "Kobe Bryant on Mamba Mentality and Work Ethic",
       "category": "athlete",
       "duration_min": 7,
-      "times_sent": 0
+      "times_sent": 1
     },
     {
       "url": "https://www.youtube.com/watch?v=mgmVOuLgFB0",
