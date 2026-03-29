@@ -14,6 +14,7 @@ import { CalendarPoller } from "../integrations/calendar-poller.js";
 import { PhotosIngestPoller } from "../senses/photos-ingest.js";
 import { detectWorkoutCompletion, scheduleBraveryNudge } from "../senses/bravery-window.js";
 import { scheduleBedrimeRehearsalNudge } from "../senses/bedtime-rehearsal.js";
+import { enrichUrls } from "./url-enrichment.js";
 import {
   recordTokenUsage,
   getDailySummary,
@@ -705,7 +706,19 @@ export class ShellLoop {
       }
       parts.push(msgContent);
     }
-    const combinedText = parts.join("\n");
+    let combinedText = parts.join("\n");
+
+    // 6b. Enrich any URLs in the message (fetch tweet content, etc.)
+    try {
+      const { enrichedText, enrichedCount } = await enrichUrls(combinedText);
+      if (enrichedCount > 0) {
+        combinedText = enrichedText;
+        console.log(`[url-enrich] enriched ${enrichedCount} URL(s)`);
+      }
+    } catch (err) {
+      console.error("[url-enrich] enrichment failed (non-fatal):", err);
+    }
+
     console.log(`--- Received ${inbound.length} message(s) ---`);
     console.log(combinedText);
     console.log(`--- End message (${combinedText.length} chars) ---`);
