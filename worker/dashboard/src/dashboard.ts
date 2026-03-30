@@ -50,9 +50,9 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function renderDashboard(snapshot: FinancialSnapshot | null, token: string): string {
+export function renderDashboard(snapshot: FinancialSnapshot | null): string {
   if (!snapshot) {
-    return noDataPage(token);
+    return noDataPage();
   }
 
   const { orgs, totalBalance, summary } = snapshot;
@@ -162,7 +162,7 @@ export function renderDashboard(snapshot: FinancialSnapshot | null, token: strin
 </html>`;
 }
 
-function noDataPage(token: string): string {
+function noDataPage(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
