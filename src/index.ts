@@ -10,6 +10,7 @@ import { googleAuth } from "./integrations/google.js";
 import { intakeCalendar, createCalendarEvent } from "./integrations/gcal.js";
 import { intakeGmail } from "./integrations/gmail.js";
 import { intakeMercury } from "./integrations/mercury.js";
+import { pushDashboard } from "./commands/push-dashboard.js";
 import {
   EGG_MEMORY_DIR,
   NUDGES_DIR,
@@ -239,6 +240,16 @@ intake
   .description("Pull Mercury bank account balances and recent transactions")
   .action(async () => {
     await intakeMercury();
+  });
+
+// ── push ──
+const push = program.command("push").description("Push data to external services");
+
+push
+  .command("dashboard")
+  .description("Push Mercury financial snapshot to the Cloudflare dashboard Worker")
+  .action(async () => {
+    await pushDashboard();
   });
 
 // ── onboard ──

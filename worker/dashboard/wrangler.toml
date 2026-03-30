@@ -1,0 +1,10 @@
+name = "egg-dashboard"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "DASHBOARD_KV"
+id = ""  # Run: wrangler kv:namespace create DASHBOARD_KV
+
+[vars]
+# DASHBOARD_TOKEN is set via: wrangler secret put DASHBOARD_TOKEN
