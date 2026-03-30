@@ -205,7 +205,7 @@ program
   .requiredOption("--title <title>", "Event title")
   .requiredOption("--start <datetime>", "Start time (ISO datetime)")
   .requiredOption("--end <datetime>", "End time (ISO datetime)")
-  .option("--account <email>", "Google account email", "kelin@poetry.camera")
+  .option("--account <email>", "Google account email", process.env.EGG_GOOGLE_ACCOUNT)
   .option("--calendar <id>", "Calendar ID", "primary")
   .option("--location <location>", "Event location")
   .option("--description <description>", "Event description")

@@ -26,8 +26,19 @@ const CC_RE = /\b(?:\d[\s-]*){13,19}\b/g;
 const ADDRESS_RE =
   /\b\d{1,6}\s+[A-Za-z0-9.\s]{2,40}\b(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Lane|Ln|Road|Rd|Court|Ct|Place|Pl|Way|Circle|Cir|Terrace|Ter|Trail|Trl|Parkway|Pkwy|Highway|Hwy)\b[.,]?\s*(?:(?:Apt|Suite|Ste|Unit|#)\s*[\w-]+)?[.,]?\s*(?:[A-Z][a-z]+[.,]?\s*)?(?:[A-Z]{2}\s+\d{5}(?:-\d{4})?)?/gi;
 
-// Emails to preserve (Kelin's own addresses)
-const PRESERVED_EMAIL_RE = /[a-zA-Z0-9_.+-]+@poetrycamera\.com/gi;
+// Emails to preserve (owner's addresses — set EGG_PRESERVED_EMAIL_DOMAINS=domain1.com,domain2.com)
+function buildPreservedEmailRe(): RegExp | null {
+  const domains = process.env.EGG_PRESERVED_EMAIL_DOMAINS;
+  if (!domains) return null;
+  const escaped = domains
+    .split(",")
+    .map((d) => d.trim().replace(/\./g, "\\."))
+    .filter(Boolean);
+  if (escaped.length === 0) return null;
+  return new RegExp(`[a-zA-Z0-9_.+-]+@(?:${escaped.join("|")})`, "gi");
+}
+
+const PRESERVED_EMAIL_RE = buildPreservedEmailRe();
 
 // ── Strip function ────────────────────────────────────────────────────────────
 
@@ -36,10 +47,12 @@ export function stripPII(text: string): string {
 
   // 1. Extract preserved emails and replace with temporary placeholders
   const preserved: string[] = [];
-  let result = text.replace(PRESERVED_EMAIL_RE, (match) => {
-    preserved.push(match);
-    return `__PRESERVED_EMAIL_${preserved.length - 1}__`;
-  });
+  let result = PRESERVED_EMAIL_RE
+    ? text.replace(PRESERVED_EMAIL_RE, (match) => {
+        preserved.push(match);
+        return `__PRESERVED_EMAIL_${preserved.length - 1}__`;
+      })
+    : text;
 
   // 2. Apply redactions (order matters: SSN before phone to avoid partial matches)
   result = result.replace(SSN_RE, "[SSN_REDACTED]");
