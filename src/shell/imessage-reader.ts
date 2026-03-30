@@ -132,8 +132,23 @@ export interface ThreadMessage {
   displayName: string;
 }
 
+const URL_RE = /https?:\/\/[^\s)>\]]+/gi;
+
 function scrubText(text: string): string {
-  return text.replace(PHONE_RE, "[PHONE]").replace(EMAIL_RE, "[EMAIL]");
+  // Preserve URLs before phone scrubbing — URLs often contain long numeric IDs
+  // (tweet IDs, video IDs) that PHONE_RE would incorrectly redact.
+  const urls: string[] = [];
+  const withPlaceholders = text.replace(URL_RE, (url) => {
+    urls.push(url);
+    return `\x00URL${urls.length - 1}\x00`;
+  });
+
+  const scrubbed = withPlaceholders
+    .replace(PHONE_RE, "[PHONE]")
+    .replace(EMAIL_RE, "[EMAIL]");
+
+  // Restore original URLs
+  return scrubbed.replace(/\x00URL(\d+)\x00/g, (_, idx) => urls[Number(idx)]);
 }
 
 function decodeAttributedBody(blob: Buffer): string | null {
