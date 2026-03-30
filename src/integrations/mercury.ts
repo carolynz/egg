@@ -11,8 +11,6 @@ interface MercuryAccount {
   status: string;
   currentBalance: number;
   availableBalance: number;
-  routingNumber: string;
-  accountNumber: string;
 }
 
 interface MercuryTransaction {
@@ -39,18 +37,26 @@ interface MercuryTransactionsResponse {
 
 interface MercurySnapshot {
   pulledAt: string;
-  accounts: Array<{
-    id: string;
-    name: string;
-    kind: string;
-    currentBalance: number;
-    availableBalance: number;
+  orgs: Array<{
+    label: string;
+    accounts: Array<{
+      id: string;
+      name: string;
+      kind: string;
+      currentBalance: number;
+      availableBalance: number;
+    }>;
+    totalBalance: number;
+    recentTransactions: MercuryTransaction[];
   }>;
   totalBalance: number;
-  recentTransactions: MercuryTransaction[];
   summary: {
     totalBalance: string;
-    accountBreakdown: Array<{ name: string; kind: string; balance: string }>;
+    orgBreakdown: Array<{
+      label: string;
+      balance: string;
+      accounts: Array<{ name: string; kind: string; balance: string }>;
+    }>;
     largeTransactions: Array<{ counterparty: string; amount: string; date: string; kind: string }>;
     netCashFlow: string;
     periodStart: string;
@@ -62,17 +68,37 @@ interface MercurySnapshot {
 
 const MERCURY_BASE = "https://api.mercury.com/api/v1";
 
-function getToken(): string {
-  const token = process.env.MERCURY_API_TOKEN;
-  if (!token) {
+/**
+ * Collect Mercury API tokens from environment variables.
+ * Supports two conventions:
+ *   1. MERCURY_TOKENS — comma-separated list of tokens
+ *   2. MERCURY_TOKEN_1, MERCURY_TOKEN_2, ... — numbered tokens
+ * At least one token must be provided.
+ */
+function getTokens(): string[] {
+  const tokens: string[] = [];
+
+  // Convention 1: comma-separated list
+  const csv = process.env.MERCURY_TOKENS;
+  if (csv) {
+    tokens.push(...csv.split(",").map((t) => t.trim()).filter(Boolean));
+  }
+
+  // Convention 2: numbered env vars
+  for (let i = 1; i <= 20; i++) {
+    const t = process.env[`MERCURY_TOKEN_${i}`];
+    if (t) tokens.push(t.trim());
+  }
+
+  if (tokens.length === 0) {
     throw new Error(
-      "Missing MERCURY_API_TOKEN environment variable.\n" +
-      "Set it in your .env file or shell:\n" +
-      "  export MERCURY_API_TOKEN=your-mercury-api-key\n" +
-      "Get your API token from Mercury dashboard → Settings → API Tokens."
+      "No Mercury API tokens found.\n" +
+      "Set MERCURY_TOKENS (comma-separated) or MERCURY_TOKEN_1, MERCURY_TOKEN_2, … in your .env file.\n" +
+      "Get API tokens from Mercury dashboard → Settings → API Tokens."
     );
   }
-  return token;
+
+  return tokens;
 }
 
 async function mercuryGet<T>(path: string, token: string): Promise<T> {
@@ -139,11 +165,8 @@ function fmtUsd(cents: number): string {
 // ── Main intake function ─────────────────────────────────────────────────────
 
 export async function intakeMercury(): Promise<void> {
-  const token = getToken();
-
-  console.log("[mercury] Fetching accounts...");
-  const accounts = await fetchAccounts(token);
-  console.log(`[mercury] Found ${accounts.length} account(s)`);
+  const tokens = getTokens();
+  console.log(`[mercury] Found ${tokens.length} org token(s)`);
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now);
@@ -152,13 +175,41 @@ export async function intakeMercury(): Promise<void> {
   const startDate = thirtyDaysAgo.toISOString().slice(0, 10);
   const endDate = now.toISOString().slice(0, 10);
 
-  // Fetch transactions across all accounts
+  const orgs: MercurySnapshot["orgs"] = [];
   const allTransactions: MercuryTransaction[] = [];
-  for (const acct of accounts) {
-    console.log(`[mercury] Fetching transactions for ${acct.name} (${acct.kind})...`);
-    const txns = await fetchTransactions(token, acct.id, startDate, endDate);
-    console.log(`[mercury]   ${txns.length} transactions`);
-    allTransactions.push(...txns);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const label = `org-${i + 1}`;
+
+    console.log(`[mercury] Fetching accounts for ${label}...`);
+    const accounts = await fetchAccounts(token);
+    console.log(`[mercury]   ${accounts.length} account(s)`);
+
+    const orgTransactions: MercuryTransaction[] = [];
+    for (const acct of accounts) {
+      console.log(`[mercury]   Fetching transactions for ${acct.kind} account...`);
+      const txns = await fetchTransactions(token, acct.id, startDate, endDate);
+      console.log(`[mercury]     ${txns.length} transactions`);
+      orgTransactions.push(...txns);
+    }
+
+    const orgBalance = accounts.reduce((sum, a) => sum + a.currentBalance, 0);
+
+    orgs.push({
+      label,
+      accounts: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        currentBalance: a.currentBalance,
+        availableBalance: a.availableBalance,
+      })),
+      totalBalance: orgBalance,
+      recentTransactions: orgTransactions,
+    });
+
+    allTransactions.push(...orgTransactions);
   }
 
   // Sort transactions by date (newest first)
@@ -169,21 +220,21 @@ export async function intakeMercury(): Promise<void> {
   });
 
   // Calculate totals
-  const totalBalance = accounts.reduce((sum, a) => sum + a.currentBalance, 0);
-
-  // Net cash flow for the period
+  const totalBalance = orgs.reduce((sum, o) => sum + o.totalBalance, 0);
   const netCashFlow = allTransactions.reduce((sum, t) => sum + t.amount, 0);
-
-  // Large transactions (>$500 absolute value)
   const largeTransactions = allTransactions.filter((t) => Math.abs(t.amount) > 500);
 
   // Build summary
   const summary = {
     totalBalance: fmtUsd(totalBalance),
-    accountBreakdown: accounts.map((a) => ({
-      name: a.name,
-      kind: a.kind,
-      balance: fmtUsd(a.currentBalance),
+    orgBreakdown: orgs.map((o) => ({
+      label: o.label,
+      balance: fmtUsd(o.totalBalance),
+      accounts: o.accounts.map((a) => ({
+        name: a.name,
+        kind: a.kind,
+        balance: fmtUsd(a.currentBalance),
+      })),
     })),
     largeTransactions: largeTransactions.slice(0, 20).map((t) => ({
       counterparty: t.counterpartyName,
@@ -198,27 +249,18 @@ export async function intakeMercury(): Promise<void> {
 
   const snapshot: MercurySnapshot = {
     pulledAt: now.toISOString(),
-    accounts: accounts.map((a) => ({
-      id: a.id,
-      name: a.name,
-      kind: a.kind,
-      currentBalance: a.currentBalance,
-      availableBalance: a.availableBalance,
-    })),
+    orgs,
     totalBalance,
-    recentTransactions: allTransactions,
     summary,
   };
 
-  // Write to data/finance/mercury.json
+  // Write to egg-memory data/finance/mercury.json
   const financeDir = join(EGG_MEMORY_DIR, "data", "finance");
   mkdirSync(financeDir, { recursive: true });
   const outPath = join(financeDir, "mercury.json");
   writeFileSync(outPath, JSON.stringify(snapshot, null, 2));
 
-  console.log(`[mercury] Wrote ${outPath}`);
-  console.log(`[mercury] Total balance: ${summary.totalBalance}`);
-  console.log(`[mercury] Net cash flow (30d): ${summary.netCashFlow}`);
-  console.log(`[mercury] Large transactions (>$500): ${largeTransactions.length}`);
+  console.log(`[mercury] Wrote snapshot to data/finance/mercury.json`);
+  console.log(`[mercury] ${orgs.length} org(s), ${allTransactions.length} total transactions`);
   console.log("[mercury] Done.");
 }
