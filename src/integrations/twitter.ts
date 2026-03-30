@@ -1,5 +1,5 @@
 /**
- * Twitter/X thread reader using the FxTwitter API.
+ * Twitter/X thread reader using the FxTwitter API with ThreadReaderApp fallback.
  *
  * FxTwitter (api.fxtwitter.com) is a free, open service that returns tweet
  * data as JSON without authentication. It supports individual tweets,
@@ -7,21 +7,22 @@
  *
  * Thread reading strategy:
  *  1. Fetch the linked tweet via FxTwitter (includes self-reply thread data)
- *  2. If the tweet is a self-reply without thread data, walk up the chain
- *     by fetching parent tweets until we find the thread root
- *  3. Collect all thread posts and return them in chronological order
- *  4. Include reply context, media descriptions, and quote tweets
+ *  2. If FxTwitter doesn't return thread data and the tweet looks like part of
+ *     a thread (self-reply or root with replies), fall back to ThreadReaderApp
+ *  3. ThreadReaderApp (threadreaderapp.com) specialises in unrolling threads —
+ *     we fetch the HTML and parse out tweet texts as a reliable fallback
+ *  4. If both fail, return the single tweet (never worse than before)
  */
 
 /** Matches twitter.com and x.com status URLs, capturing username and tweet ID. */
 const TWITTER_URL_RE =
   /https?:\/\/(?:(?:www\.)?(?:twitter\.com|x\.com)|(?:fixupx|fxtwitter)\.com)\/(\w+)\/status\/(\d+)/;
 
-/** Max tweets to collect when walking a reply chain upward. */
-const MAX_CHAIN_DEPTH = 20;
-
 /** Request timeout in ms. */
 const FETCH_TIMEOUT = 15_000;
+
+/** ThreadReaderApp fallback timeout in ms. */
+const THREADREADER_TIMEOUT = 10_000;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -191,12 +192,20 @@ export async function fetchTweet(
     return tweet;
   }
 
-  // If this tweet is a self-reply, try to walk up to find the thread root.
-  // FxTwitter sometimes only returns thread data for the root tweet, so
-  // fetching the root may give us the full thread.
+  // If this tweet is a self-reply, try to assemble the full thread.
   if (isSelfReply(rawTweet)) {
-    console.log(`[twitter] tweet is a self-reply, walking up to find thread root`);
+    console.log(`[twitter] tweet is a self-reply, attempting thread assembly`);
     const thread = await assembleThread(rawTweet, username);
+    if (thread) return thread;
+  }
+
+  // If this is a thread root (no replying_to) with replies, the thread
+  // content lives in the replies — try ThreadReaderApp as fallback.
+  if (!rawTweet.replying_to && rawTweet.replies > 0) {
+    console.log(
+      `[twitter] root tweet has ${rawTweet.replies} replies, trying ThreadReaderApp`,
+    );
+    const thread = await fetchThreadFromReaderApp(rawTweet);
     if (thread) return thread;
   }
 
@@ -214,87 +223,162 @@ function isSelfReply(tweet: FxTweet): boolean {
 }
 
 /**
- * Walk up a self-reply chain to find tweets that FxTwitter returns thread
- * data for. Collects tweets along the way.
+ * Assemble a full thread when the user linked a mid-thread tweet.
  *
- * Strategy: We can't get parent tweet IDs from FxTwitter directly, but when
- * we fetch ANY tweet in a self-thread, FxTwitter may include the thread data.
- * We try fetching the conversation by looking at tweet IDs near the chain
- * (tweet IDs are chronological snowflake IDs, so earlier tweets have smaller IDs).
- *
- * If we can't walk the chain, we return null and the caller uses the original tweet.
+ * FxTwitter doesn't expose parent tweet IDs in the `replying_to` field (it
+ * only returns the username), so we can't walk up the reply chain directly.
+ * Instead we fall back to ThreadReaderApp which specialises in unrolling
+ * threads from any tweet in the chain.
  */
 async function assembleThread(
   startTweet: FxTweet,
-  username: string,
+  _username: string,
 ): Promise<TweetData | null> {
-  // Collect all tweets we've seen, keyed by ID
-  const tweetsById = new Map<string, FxTweet>();
-  tweetsById.set(startTweet.id, startTweet);
+  return fetchThreadFromReaderApp(startTweet);
+}
 
-  // Try fetching the thread by looking for tweet IDs in the text or context.
-  // FxTwitter sometimes includes thread data even for non-root tweets.
-  // We've already checked the start tweet — now try alternative approaches.
+// ---------------------------------------------------------------------------
+// ThreadReaderApp fallback
+// ---------------------------------------------------------------------------
 
-  // Approach: Look for thread data from any tweet we can find.
-  // Check if any tweet in our collection has thread data from FxTwitter.
-  const withThread = findTweetWithThreadData(tweetsById);
-  if (withThread) {
-    return buildThreadFromFxData(withThread, tweetsById);
+/**
+ * Fetch a thread from ThreadReaderApp by tweet ID. ThreadReaderApp unrolls
+ * threads from any tweet in the chain, making it a reliable fallback when
+ * FxTwitter doesn't return thread data.
+ *
+ * Returns a TweetData with threadPosts populated, or null on failure.
+ * Preserves metadata (stats, media) from the original FxTwitter tweet.
+ */
+async function fetchThreadFromReaderApp(
+  originalTweet: FxTweet,
+): Promise<TweetData | null> {
+  const url = `https://threadreaderapp.com/thread/${originalTweet.id}.html`;
+  console.log(`[twitter] fetching ThreadReaderApp: ${url}`);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "egg-bot/1.0",
+        Accept: "text/html",
+      },
+      signal: AbortSignal.timeout(THREADREADER_TIMEOUT),
+    });
+
+    if (!res.ok) {
+      console.error(
+        `[twitter] ThreadReaderApp returned ${res.status} for tweet ${originalTweet.id}`,
+      );
+      return null;
+    }
+
+    const html = await res.text();
+    return parseThreadReaderHtml(html, originalTweet);
+  } catch (err) {
+    console.error("[twitter] ThreadReaderApp fetch failed:", err);
+    return null;
   }
-
-  // If we can't find thread data, return null — the caller will use the
-  // original tweet with reply context noted.
-  return null;
 }
 
 /**
- * Find any tweet in the map that has FxTwitter thread data.
+ * Parse ThreadReaderApp HTML into a TweetData with thread posts.
+ * ThreadReaderApp renders tweet texts in elements with class "tweet-text"
+ * (sometimes <p>, sometimes <div>). We try several patterns.
  */
-function findTweetWithThreadData(
-  tweets: Map<string, FxTweet>,
-): FxTweet | null {
-  for (const tweet of tweets.values()) {
-    if (tweet.thread?.tweets && tweet.thread.tweets.length > 0) {
-      return tweet;
-    }
-  }
-  return null;
-}
+function parseThreadReaderHtml(
+  html: string,
+  originalTweet: FxTweet,
+): TweetData | null {
+  const tweetTexts = extractTweetTexts(html);
 
-/**
- * Build a TweetData from a tweet that has FxTwitter thread data,
- * merging in any additional tweets we collected.
- */
-function buildThreadFromFxData(
-  rootCandidate: FxTweet,
-  extraTweets: Map<string, FxTweet>,
-): TweetData {
-  const allRaw = [rootCandidate, ...(rootCandidate.thread?.tweets ?? [])];
-
-  // Add any extra tweets not already in the thread
-  for (const [id, tweet] of extraTweets) {
-    if (!allRaw.some((t) => t.id === id)) {
-      allRaw.push(tweet);
-    }
+  // Need at least 2 tweets to call it a thread
+  if (tweetTexts.length < 2) {
+    console.log(
+      `[twitter] ThreadReaderApp returned ${tweetTexts.length} tweets — not enough for a thread`,
+    );
+    return null;
   }
 
-  // Deduplicate and sort by tweet ID (chronological)
-  const seen = new Set<string>();
-  const unique: FxTweet[] = [];
-  for (const t of allRaw) {
-    if (!seen.has(t.id)) {
-      seen.add(t.id);
-      unique.push(t);
-    }
-  }
-  unique.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  console.log(
+    `[twitter] ThreadReaderApp returned ${tweetTexts.length} tweets`,
+  );
 
-  // First tweet is the thread root
-  const root = parseFxTweet(unique[0]);
-  root.isThread = unique.length > 1;
-  root.threadPosts = unique.slice(1).map(parseFxTweet);
+  // Build root from the original FxTwitter data (preserves stats, media, etc.)
+  const root = parseFxTweet(originalTweet);
+  const author = root.author;
+
+  root.isThread = true;
+  root.threadPosts = tweetTexts.slice(1).map(
+    (text, i): TweetData => ({
+      id: `${originalTweet.id}-tr-${i + 1}`,
+      url: `https://x.com/${author.handle}/status/${originalTweet.id}`,
+      author,
+      text,
+      createdAt: originalTweet.created_at,
+      stats: { likes: 0, retweets: 0, replies: 0, views: null },
+      media: [],
+      quotedTweet: null,
+      replyingTo: null,
+      isThread: false,
+      threadPosts: [],
+    }),
+  );
+
   return root;
+}
+
+/**
+ * Extract tweet text blocks from ThreadReaderApp HTML.
+ * Tries several CSS class patterns used across ThreadReaderApp versions.
+ */
+function extractTweetTexts(html: string): string[] {
+  let match: RegExpExecArray | null;
+
+  // Pattern 1: <p> or <div> elements with "tweet-text" in their class
+  const tweetTextRegex =
+    /<(?:p|div)[^>]*class="[^"]*tweet-text[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div)>/gi;
+  const texts: string[] = [];
+  while ((match = tweetTextRegex.exec(html)) !== null) {
+    const text = stripHtml(match[1]);
+    if (text) texts.push(text);
+  }
+  if (texts.length > 1) return texts;
+
+  // Pattern 2: <div class="content-tweet"> containers with <p> inside
+  texts.length = 0;
+  const contentTweetRegex =
+    /<div[^>]*class="[^"]*content-tweet[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/gi;
+  while ((match = contentTweetRegex.exec(html)) !== null) {
+    const text = stripHtml(match[1]);
+    if (text) texts.push(text);
+  }
+  if (texts.length > 1) return texts;
+
+  // Pattern 3: data-tweet-id elements (more recent ThreadReaderApp versions)
+  texts.length = 0;
+  const dataTweetRegex =
+    /<div[^>]*data-tweet-id="[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/gi;
+  while ((match = dataTweetRegex.exec(html)) !== null) {
+    const text = stripHtml(match[1]);
+    if (text) texts.push(text);
+  }
+
+  return texts;
+}
+
+/** Strip HTML tags and decode common entities. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/")
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
