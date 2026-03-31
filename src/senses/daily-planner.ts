@@ -6,7 +6,8 @@
  * The brain synthesizes everything into a concise today.md.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
 import { join } from "path";
 import { EGG_MEMORY_DIR } from "../config.js";
 import { callBrain } from "../brain/index.js";
@@ -265,6 +266,125 @@ export async function generateTodayMd(force = false): Promise<string> {
   // Write today.md
   writeFileSync(todayPath, result);
   console.log(`[planner] wrote ${todayPath} (${result.length} chars)`);
+
+  return result;
+}
+
+// ── Periodic refresh ────────────────────────────────────────────────────────
+
+/** Hash of data sources from last refresh — used to detect changes */
+let lastRefreshHash = "";
+
+/** Build a hash of all data sources to detect meaningful changes */
+function computeDataHash(calendarEvents: string, goals: string, backlog: string): string {
+  // Include current 15-min time slot so time-based priority shifts trigger refresh
+  const now = new Date();
+  const timeSlot = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${Math.floor(now.getMinutes() / 15)}`;
+  const content = `${timeSlot}|${calendarEvents}|${goals}|${backlog}`;
+  return createHash("md5").update(content).digest("hex");
+}
+
+/**
+ * Refresh today.md with time-aware updates.
+ *
+ * Unlike generateTodayMd() which creates from scratch, this:
+ * - Preserves manual edits and status updates from the current today.md
+ * - Strikes through past events, highlights upcoming ones
+ * - Recalculates open time windows
+ * - Only calls the brain if data sources have actually changed
+ *
+ * Returns the updated content, or empty string if no refresh was needed.
+ */
+export async function refreshTodayMd(): Promise<string> {
+  const today = getTodayDate();
+  const todayPath = join(EGG_MEMORY_DIR, "today.md");
+
+  // Only refresh if today.md exists and is for today
+  if (!existsSync(todayPath)) {
+    console.log("[planner:refresh] no today.md found — running full generation");
+    return generateTodayMd();
+  }
+
+  const currentContent = readFileSync(todayPath, "utf-8");
+  if (!currentContent.includes(`# Today — ${today}`)) {
+    console.log("[planner:refresh] today.md is for a different day — running full generation");
+    return generateTodayMd(true);
+  }
+
+  // Gather current data sources
+  const calendarEvents = readCalendarEvents(today);
+  const goals = readFileSafe(join(EGG_MEMORY_DIR, "goals.yaml"), 4000);
+  const backlog = readBacklog();
+  const goalProgress = formatGoalProgress(loadGoalProgress());
+
+  // Check if anything has changed since last refresh
+  const currentHash = computeDataHash(calendarEvents, goals, backlog);
+  if (currentHash === lastRefreshHash) {
+    console.log("[planner:refresh] no changes detected — skipping");
+    return "";
+  }
+
+  const now = new Date();
+  const currentTime = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const dayOfWeek = getDayOfWeek();
+
+  // Read recent conversation for task completion signals
+  let recentConversation = "";
+  try {
+    const statePath = join(EGG_MEMORY_DIR, ".egg-state.json");
+    if (existsSync(statePath)) {
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      const history = state.history || [];
+      const recent = history.slice(-10);
+      recentConversation = recent
+        .map((m: { role: string; content: string }) => `[${m.role}] ${m.content.slice(0, 200)}`)
+        .join("\n");
+    }
+  } catch {}
+
+  const prompt = [
+    `Refresh today.md for ${today} (${dayOfWeek}). Current time: ${currentTime}.`,
+    "",
+    "You are updating an existing today.md with time-aware changes. Write ONLY the updated today.md content.",
+    "",
+    "## What to update",
+    "- Strike through (~~text~~) calendar events that have already passed",
+    "- Mark the next upcoming event with → to highlight it",
+    "- Check off tasks that appear completed based on conversation context",
+    "- Recalculate open time windows between remaining events",
+    "- If new calendar events appeared, add them to the schedule",
+    "- Re-prioritize should-do items based on remaining time in the day",
+    "- Preserve any manual edits, notes, or status updates the user added",
+    "",
+    "## Rules",
+    "- Keep the same format/structure as the current today.md",
+    "- Don't remove completed items — mark them [x] so progress is visible",
+    "- If a workout hasn't been done and there's a gap coming up, suggest it",
+    "- Be conservative — don't change things that don't need changing",
+    "- If it's evening (after 8pm), shift focus to wind-down and next-day prep",
+    "",
+    "## Current today.md",
+    currentContent,
+    "",
+    `## Updated calendar events for ${today}`,
+    calendarEvents,
+    "",
+    "## Goal progress (this week)",
+    goalProgress,
+    "",
+    "## Current backlog",
+    backlog || "Backlog is empty.",
+    "",
+    "## Recent conversation (for task completion signals)",
+    recentConversation || "No recent conversation.",
+  ].join("\n");
+
+  console.log(`[planner:refresh] refreshing today.md at ${currentTime}...`);
+  const result = await callBrain({ history: [], message: prompt });
+
+  writeFileSync(todayPath, result);
+  lastRefreshHash = currentHash;
+  console.log(`[planner:refresh] updated today.md (${result.length} chars)`);
 
   return result;
 }

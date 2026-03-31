@@ -12,6 +12,7 @@ import { ImessageIngestPoller } from "../senses/imessage-ingest.js";
 import { EmailPoller } from "../integrations/email-poller.js";
 import { CalendarPoller } from "../integrations/calendar-poller.js";
 import { PhotosIngestPoller } from "../senses/photos-ingest.js";
+import { TodayRefreshPoller } from "../integrations/today-refresh.js";
 import { detectWorkoutCompletion, scheduleBraveryNudge } from "../senses/bravery-window.js";
 import { scheduleBedrimeRehearsalNudge } from "../senses/bedtime-rehearsal.js";
 import { enrichUrls } from "./url-enrichment.js";
@@ -303,6 +304,7 @@ export class ShellLoop {
   private emailPoller: EmailPoller;
   private calendarPoller: CalendarPoller;
   private photosIngestPoller: PhotosIngestPoller;
+  private todayRefreshPoller: TodayRefreshPoller;
   private state: ShellState;
   private seenSet: Set<number>;
   private userPhoneNorm: string;
@@ -326,6 +328,7 @@ export class ShellLoop {
     this.emailPoller = new EmailPoller();
     this.calendarPoller = new CalendarPoller();
     this.photosIngestPoller = new PhotosIngestPoller();
+    this.todayRefreshPoller = new TodayRefreshPoller();
   }
 
   async init(): Promise<void> {
@@ -860,6 +863,7 @@ export class ShellLoop {
       this.emailPoller.stop();
       this.calendarPoller.stop();
       this.photosIngestPoller.stop();
+      this.todayRefreshPoller.stop();
       this.persist();
       process.exit(0);
     };
@@ -875,6 +879,7 @@ export class ShellLoop {
     this.emailPoller.start();
     this.calendarPoller.start();
     this.photosIngestPoller.start();
+    this.todayRefreshPoller.start();
 
     console.log("Shell loop starting (poll every 3s)");
     while (this.running) {

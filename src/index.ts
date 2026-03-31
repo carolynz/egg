@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { ShellLoop } from "./shell/loop.js";
 import { callBrain } from "./brain/index.js";
-import { senseDaily, senseImessage, generateTodayMd } from "./senses/index.js";
+import { senseDaily, senseImessage, generateTodayMd, refreshTodayMd } from "./senses/index.js";
 import { runOnboard } from "./commands/onboard.js";
 import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
@@ -164,6 +164,19 @@ intake
     checkMemoryDir();
     await generateTodayMd();
     console.log("today.md generated successfully");
+  });
+
+intake
+  .command("today-refresh")
+  .description("Refresh today.md — time-aware update preserving manual edits and marking past events")
+  .action(async () => {
+    checkMemoryDir();
+    const result = await refreshTodayMd();
+    if (result) {
+      console.log("today.md refreshed successfully");
+    } else {
+      console.log("No refresh needed — no changes detected");
+    }
   });
 
 // ── oura:auth ──

@@ -54,6 +54,13 @@ export const CALENDAR_POLL_INTERVAL_MS = parseInt(env("CALENDAR_POLL_INTERVAL_MS
 // Photos library ingestion poller interval (default 30 minutes)
 export const PHOTOS_INGEST_INTERVAL_MS = parseInt(env("PHOTOS_INGEST_INTERVAL_MS") || "", 10) || 30 * 60 * 1000;
 
+// Today.md refresh poller interval (default 15 minutes)
+export const TODAY_REFRESH_INTERVAL_MS = parseInt(env("TODAY_REFRESH_INTERVAL_MS") || "", 10) || 15 * 60 * 1000;
+
+// Waking hours for today.md refresh (ET): 9 AM start, 2 AM end (next day)
+export const WAKING_HOUR_START = parseInt(env("WAKING_HOUR_START") || "", 10) || 9;
+export const WAKING_HOUR_END = parseInt(env("WAKING_HOUR_END") || "", 10) || 2;
+
 // ── Lazy: only needed by serve/send commands ──
 // These throw if accessed without being set, but don't crash at import time.
 let _eggAppleId: string | undefined;
