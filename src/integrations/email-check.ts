@@ -15,6 +15,7 @@ import {
 import { EGG_MEMORY_DIR, NUDGES_DIR } from "../config.js";
 import { EMAIL_CHECK_LOG } from "../logger.js";
 import { recordTokenUsage } from "../token-tracker.js";
+import { syncEmailsToMemory, type EmailForSync } from "./email-memory-sync.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1238,6 +1239,33 @@ export async function checkNewEmails(): Promise<void> {
     if (checkNumber > lastCheckNumber) {
       writeOpenThreadsNudge(openThreads);
     }
+  }
+
+  // ── Email-to-memory sync ──────────────────────────────────────────────────
+  // Cross-reference genuine inbound + sent emails against backlog, projects,
+  // people, and goals — auto-update memory files when matches are found.
+  if (genuineInbound.length > 0 || allSentEmails.length > 0) {
+    const syncInbound: EmailForSync[] = genuineInbound.map((e) => ({
+      direction: "inbound" as const,
+      from: e.from,
+      to: e.to,
+      subject: e.subject,
+      snippet: e.snippet,
+      date: e.date,
+      body: e.body,
+    }));
+    const syncSent: EmailForSync[] = allSentEmails.map((e) => ({
+      direction: "sent" as const,
+      from: "me",
+      to: e.to,
+      subject: e.subject,
+      snippet: e.snippet,
+      date: new Date(e.timestamp).toISOString(),
+    }));
+    // Fire-and-forget: don't block the check cycle
+    syncEmailsToMemory(syncInbound, syncSent).catch((err) => {
+      logCheck(`ERROR in email-memory sync: ${err}`);
+    });
   }
 
   // Update cursor
