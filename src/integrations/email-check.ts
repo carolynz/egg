@@ -731,6 +731,20 @@ function isTransactionalEmail(email: NewEmail): boolean {
   return false;
 }
 
+// ── Business-critical automated senders ─────────────────────────────────────
+// These domains send automated emails that should bypass marketing/transactional
+// filters and be passed to the memory sync (but not necessarily nudged).
+
+const BUSINESS_CRITICAL_DOMAINS = new Set([
+  "mercury.com",           // banking: invoices sent/viewed/paid, transfers, account activity
+]);
+
+function isBusinessCriticalEmail(email: NewEmail): boolean {
+  const addr = extractEmailAddress(email.from);
+  const domain = extractDomain(addr);
+  return BUSINESS_CRITICAL_DOMAINS.has(domain);
+}
+
 // ── Out-of-office / auto-reply detection ──────────────────────────────────
 
 /** Subject-line patterns indicating out-of-office or auto-reply emails */
@@ -1244,8 +1258,19 @@ export async function checkNewEmails(): Promise<void> {
   // ── Email-to-memory sync ──────────────────────────────────────────────────
   // Cross-reference genuine inbound + sent emails against backlog, projects,
   // people, and goals — auto-update memory files when matches are found.
-  if (genuineInbound.length > 0 || allSentEmails.length > 0) {
-    const syncInbound: EmailForSync[] = genuineInbound.map((e) => ({
+  //
+  // Include business-critical automated emails (Mercury, etc.) that were
+  // filtered out of genuineInbound by marketing/transactional heuristics.
+  const businessCritical = inbound.filter((e) =>
+    isBusinessCriticalEmail(e) && !genuineInbound.includes(e),
+  );
+  if (businessCritical.length > 0) {
+    logCheck(`${businessCritical.length} business-critical email(s) added to memory sync`);
+  }
+  const syncInboundEmails = [...genuineInbound, ...businessCritical];
+
+  if (syncInboundEmails.length > 0 || allSentEmails.length > 0) {
+    const syncInbound: EmailForSync[] = syncInboundEmails.map((e) => ({
       direction: "inbound" as const,
       from: e.from,
       to: e.to,
