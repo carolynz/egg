@@ -295,6 +295,112 @@ export async function createCalendarEvent(
   return { eventId, link };
 }
 
+// ── Update calendar event ───────────────────────────────────────────────────
+
+export interface UpdateEventInput {
+  title?: string;
+  start?: string;        // ISO datetime
+  end?: string;          // ISO datetime
+  location?: string;
+  description?: string;
+}
+
+export interface UpdateEventResult {
+  eventId: string;
+  link: string;
+}
+
+export async function updateCalendarEvent(
+  account: string,
+  eventId: string,
+  calendarId: string = "primary",
+  updates: UpdateEventInput,
+): Promise<UpdateEventResult> {
+  const config = getGoogleOAuthConfig();
+  if (!config) throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
+
+  const accounts = loadAllAccounts();
+  const acct = accounts.find((a) => a.email === account);
+  if (!acct) throw new Error(`No Google account found for ${account}. Run \`egg google:auth\` first.`);
+
+  const auth = await getAuthedClient(config, acct);
+  const cal = google.calendar({ version: "v3", auth });
+
+  const requestBody: Record<string, unknown> = {};
+  if (updates.title !== undefined) requestBody.summary = updates.title;
+  if (updates.location !== undefined) requestBody.location = updates.location;
+  if (updates.description !== undefined) requestBody.description = updates.description;
+  if (updates.start !== undefined) requestBody.start = { dateTime: updates.start };
+  if (updates.end !== undefined) requestBody.end = { dateTime: updates.end };
+
+  const res = await cal.events.patch({
+    calendarId,
+    eventId,
+    requestBody,
+  });
+
+  const link = res.data.htmlLink ?? "";
+
+  logGoogle(`Updated event "${eventId}" on ${calendarId} for ${account}`);
+
+  // Refresh local calendar data so the next brain call sees the update
+  const updatedEvent: CalendarEvent = {
+    id: eventId,
+    title: res.data.summary ?? "(no title)",
+    start: res.data.start?.dateTime ?? res.data.start?.date ?? "",
+    end: res.data.end?.dateTime ?? res.data.end?.date ?? "",
+    allDay: !res.data.start?.dateTime,
+    location: res.data.location ?? null,
+    description: res.data.description ? res.data.description.slice(0, 500) : null,
+    attendees: (res.data.attendees ?? []).map((a) => a.email ?? "").filter(Boolean),
+    calendar: calendarId === "primary" ? "Primary" : calendarId,
+    status: res.data.status ?? "confirmed",
+  };
+  writeCalendarData(account, [updatedEvent]);
+
+  return { eventId, link };
+}
+
+// ── Delete calendar event ───────────────────────────────────────────────────
+
+export async function deleteCalendarEvent(
+  account: string,
+  eventId: string,
+  calendarId: string = "primary",
+): Promise<void> {
+  const config = getGoogleOAuthConfig();
+  if (!config) throw new Error("No Google OAuth config found. Run `egg google:auth` first.");
+
+  const accounts = loadAllAccounts();
+  const acct = accounts.find((a) => a.email === account);
+  if (!acct) throw new Error(`No Google account found for ${account}. Run \`egg google:auth\` first.`);
+
+  const auth = await getAuthedClient(config, acct);
+  const cal = google.calendar({ version: "v3", auth });
+
+  await cal.events.delete({
+    calendarId,
+    eventId,
+  });
+
+  logGoogle(`Deleted event "${eventId}" on ${calendarId} for ${account}`);
+
+  // Mark as cancelled in local data so brain sees it immediately
+  const cancelledEvent: CalendarEvent = {
+    id: eventId,
+    title: "",
+    start: new Date().toISOString(),
+    end: new Date().toISOString(),
+    allDay: false,
+    location: null,
+    description: null,
+    attendees: [],
+    calendar: calendarId === "primary" ? "Primary" : calendarId,
+    status: "cancelled",
+  };
+  writeCalendarData(account, [cancelledEvent]);
+}
+
 // ── Main intake function ─────────────────────────────────────────────────────
 
 export async function intakeCalendar(opts?: { lookbackDays?: number }): Promise<void> {

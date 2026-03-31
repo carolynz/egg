@@ -7,7 +7,7 @@ import { senseDaily, senseImessage, generateTodayMd } from "./senses/index.js";
 import { runOnboard } from "./commands/onboard.js";
 import { ouraAuth } from "./integrations/oura.js";
 import { googleAuth } from "./integrations/google.js";
-import { intakeCalendar, createCalendarEvent } from "./integrations/gcal.js";
+import { intakeCalendar, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from "./integrations/gcal.js";
 import { intakeGmail } from "./integrations/gmail.js";
 import { intakeMercury } from "./integrations/mercury.js";
 import { pushDashboard } from "./commands/push-dashboard.js";
@@ -230,6 +230,65 @@ program
       console.log(`Link: ${result.link}`);
     } catch (err) {
       console.error("[calendar:create] Failed:", err);
+      process.exit(1);
+    }
+  });
+
+// ── calendar:update ──
+program
+  .command("calendar:update")
+  .description("Update/move a Google Calendar event")
+  .requiredOption("--event-id <id>", "Event ID to update")
+  .option("--title <title>", "New event title")
+  .option("--start <datetime>", "New start time (ISO datetime)")
+  .option("--end <datetime>", "New end time (ISO datetime)")
+  .option("--account <email>", "Google account email", process.env.EGG_GOOGLE_ACCOUNT)
+  .option("--calendar <id>", "Calendar ID", "primary")
+  .option("--location <location>", "New event location")
+  .option("--description <description>", "New event description")
+  .action(async (opts: {
+    eventId: string;
+    title?: string;
+    start?: string;
+    end?: string;
+    account: string;
+    calendar: string;
+    location?: string;
+    description?: string;
+  }) => {
+    try {
+      const result = await updateCalendarEvent(opts.account, opts.eventId, opts.calendar, {
+        title: opts.title,
+        start: opts.start,
+        end: opts.end,
+        location: opts.location,
+        description: opts.description,
+      });
+      console.log(`Event updated: ${result.eventId}`);
+      console.log(`Link: ${result.link}`);
+    } catch (err) {
+      console.error("[calendar:update] Failed:", err);
+      process.exit(1);
+    }
+  });
+
+// ── calendar:delete ──
+program
+  .command("calendar:delete")
+  .description("Delete a Google Calendar event")
+  .requiredOption("--event-id <id>", "Event ID to delete")
+  .option("--account <email>", "Google account email", process.env.EGG_GOOGLE_ACCOUNT)
+  .option("--calendar <id>", "Calendar ID", "primary")
+  .action(async (opts: {
+    eventId: string;
+    account: string;
+    calendar: string;
+  }) => {
+    try {
+      await deleteCalendarEvent(opts.account, opts.eventId, opts.calendar);
+      console.log(`Event deleted: ${opts.eventId}`);
+    } catch (err) {
+      console.error("[calendar:delete] Failed:", err);
       process.exit(1);
     }
   });
