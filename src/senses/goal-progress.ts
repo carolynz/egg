@@ -84,18 +84,27 @@ function serializeProgressYaml(progress: GoalProgress): string {
   return lines.join("\n");
 }
 
-/** Load goal progress from disk. Returns default structure if file doesn't exist. */
+/** Load goal progress from disk. Returns default structure if file doesn't exist.
+ *  Always enriches with live workout data from workouts.md so callers
+ *  never see stale workout info — even if goal-progress.yaml is missing. */
 export function loadGoalProgress(): GoalProgress {
+  let progress: GoalProgress;
+
   if (!existsSync(PROGRESS_FILE)) {
-    return getDefaultProgress();
+    progress = getDefaultProgress();
+  } else {
+    try {
+      const content = readFileSync(PROGRESS_FILE, "utf-8");
+      progress = parseProgressYaml(content);
+    } catch {
+      progress = getDefaultProgress();
+    }
   }
 
-  try {
-    const content = readFileSync(PROGRESS_FILE, "utf-8");
-    return parseProgressYaml(content);
-  } catch {
-    return getDefaultProgress();
-  }
+  // Always sync workout data from the source of truth (workouts.md)
+  syncWorkoutProgress(progress);
+
+  return progress;
 }
 
 /** Save goal progress to disk */

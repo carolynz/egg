@@ -311,6 +311,9 @@ export async function refreshTodayMd(): Promise<string> {
     return generateTodayMd(true);
   }
 
+  // Ensure goal progress week is current and yaml is fresh for other consumers
+  updateWeekStart();
+
   // Gather current data sources
   const calendarEvents = readCalendarEvents(today);
   const goals = readFileSafe(join(EGG_MEMORY_DIR, "goals.yaml"), 4000);
