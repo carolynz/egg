@@ -131,6 +131,55 @@ function getDefaultProgress(): GoalProgress {
   };
 }
 
+/** Parse workout dates from data/workouts.md headers like "## 2026-03-26 (Thursday) — ..." */
+function parseWorkoutDates(): string[] {
+  const workoutsFile = join(EGG_MEMORY_DIR, "data", "workouts.md");
+  if (!existsSync(workoutsFile)) return [];
+
+  try {
+    const content = readFileSync(workoutsFile, "utf-8");
+    const dates: string[] = [];
+    for (const line of content.split("\n")) {
+      const match = line.match(/^## (\d{4}-\d{2}-\d{2})\b/);
+      if (match) dates.push(match[1]);
+    }
+    return dates;
+  } catch {
+    return [];
+  }
+}
+
+/** Sync workout data from workouts.md into body-2026 goal progress */
+function syncWorkoutProgress(progress: GoalProgress): boolean {
+  const dates = parseWorkoutDates();
+  if (dates.length === 0) return false;
+
+  if (!progress["body-2026"]) {
+    progress["body-2026"] = { week_start: getCurrentWeekStart() };
+  }
+
+  const body = progress["body-2026"];
+  const weekStart = (body.week_start as string) || getCurrentWeekStart();
+
+  // Most recent workout date (dates are in chronological order in the file)
+  const lastWorkout = dates[dates.length - 1];
+
+  // Count workouts since week_start (inclusive)
+  const workoutsThisWeek = dates.filter((d) => d >= weekStart).length;
+
+  let changed = false;
+  if (body.last_workout !== lastWorkout) {
+    body.last_workout = lastWorkout;
+    changed = true;
+  }
+  if (body.workouts_this_week !== workoutsThisWeek) {
+    body.workouts_this_week = workoutsThisWeek;
+    changed = true;
+  }
+
+  return changed;
+}
+
 /** Reset weekly counters if the week has rolled over */
 export function updateWeekStart(): void {
   const progress = loadGoalProgress();
@@ -148,6 +197,11 @@ export function updateWeekStart(): void {
       data.week_start = currentWeek;
       changed = true;
     }
+  }
+
+  // Sync workout data from the actual log
+  if (syncWorkoutProgress(progress)) {
+    changed = true;
   }
 
   if (changed) {
